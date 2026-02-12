@@ -30,3 +30,15 @@ AABBCC pieces
 
 list of all sets
 https://github.com/Schnerry/SeymourAnalyzerFabric/blob/11bc69bdfde5af5928478cec5bb5d48dab858fe9/src/main/resources/data/seymouranalyzer/checklistdata.json
+
+needed things to display
+landing page - show dashboard at slight tilt
+
+after sign in -> dashboard
+dashboard shows total seymours all users
+
+side bar tabs to
+add seymours
+need for sets
+view your collection bar at top to view others, sets tab, findable sets (sets that could be created using other users seymours)
+
