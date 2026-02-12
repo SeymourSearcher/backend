@@ -20,6 +20,7 @@ Duplicate pairs
 Hex codes close to skyblock armour sets
 repeating hex: #E3E3E3
 2 digit hex: #0000CE
+sets with triple AxByCz on all pieces (A,B,C same)
 AxBxCx sets
 
 0-1.999 t1
