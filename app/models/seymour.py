@@ -6,10 +6,10 @@ from app.database import Base
 
 
 class ItemName(PyEnum):
-    CASHMERE_JACKET = 0
-    OXFORD_SHOES = 1
+    VELVET_TOP_HAT = 0
+    CASHMERE_JACKET = 1
     SATIN_TROUSERS = 2
-    VELVET_TOP_HAT = 3
+    OXFORD_SHOES = 3
 
 
 class Seymour(Base):
