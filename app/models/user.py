@@ -14,6 +14,7 @@ class User(Base):
     avatar_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_uploaded: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     seymours: Mapped[list["Seymour"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 

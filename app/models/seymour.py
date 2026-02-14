@@ -1,6 +1,5 @@
-from datetime import datetime
 from enum import Enum as PyEnum
-from sqlalchemy import Integer, String, DateTime, ForeignKey, Enum
+from sqlalchemy import Integer, String, ForeignKey, Enum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -20,7 +19,6 @@ class Seymour(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
     item_name: Mapped[ItemName] = mapped_column(Enum(ItemName, values_callable=lambda x: [e.value for e in x]))
     hex_color: Mapped[str] = mapped_column(String(6))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User"] = relationship(back_populates="seymours")
 

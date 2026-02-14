@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,8 +50,8 @@ async def upload_seymours(
         ]
         await db.execute(insert(Seymour), values)
     
+    user.last_uploaded = datetime.utcnow()
     await db.commit()
-    print('committed')
     
     return UploadResponse(imported=len(parsed), skipped=skipped)
 
