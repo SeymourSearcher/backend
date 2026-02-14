@@ -1,5 +1,6 @@
-import re
-from app.schemas.seymour import SeymourCreate, ItemName
+from app.schemas.seymour import SeymourCreate, ItemName, ITEM_DISPLAY_NAMES
+
+DISPLAY_TO_ITEM = {v: k for k, v in ITEM_DISPLAY_NAMES.items()}
 
 
 def parse_seymour_line(line: str) -> SeymourCreate | None:
@@ -14,11 +15,10 @@ def parse_seymour_line(line: str) -> SeymourCreate | None:
     item_name_str = parts[0]
     hex_color = parts[1][1:]
     
-    # Match the item name by checking if it ends with a known item name
     item_name = None
-    for name in ItemName:
-        if item_name_str.endswith(name.value):
-            item_name = name
+    for display_name, enum_val in DISPLAY_TO_ITEM.items():
+        if item_name_str.endswith(display_name):
+            item_name = enum_val
             break
     
     if item_name is None:

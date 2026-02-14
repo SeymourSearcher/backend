@@ -38,6 +38,9 @@ async def upload_seymours(
     text = content.decode("utf-8")
     
     parsed, skipped = parse_seymour_file(text)
+
+    if len(parsed) > 100000:
+        raise HTTPException(status_code=400, detail="Too many seymours to upload")
     
     # Clear all existing seymours for this user
     await db.execute(delete(Seymour).where(Seymour.user_id == user.id))

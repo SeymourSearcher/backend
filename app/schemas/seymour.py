@@ -1,17 +1,29 @@
-from enum import Enum
-from pydantic import BaseModel, ConfigDict
+from enum import IntEnum
+from pydantic import BaseModel, ConfigDict, field_serializer
 
 
-class ItemName(str, Enum):
-    CASHMERE_JACKET = "Cashmere Jacket"
-    OXFORD_SHOES = "Oxford Shoes"
-    SATIN_TROUSERS = "Satin Trousers"
-    VELVET_TOP_HAT = "Velvet Top Hat"
+class ItemName(IntEnum):
+    CASHMERE_JACKET = 0
+    OXFORD_SHOES = 1
+    SATIN_TROUSERS = 2
+    VELVET_TOP_HAT = 3
+
+
+ITEM_DISPLAY_NAMES = {
+    ItemName.CASHMERE_JACKET: "Cashmere Jacket",
+    ItemName.OXFORD_SHOES: "Oxford Shoes",
+    ItemName.SATIN_TROUSERS: "Satin Trousers",
+    ItemName.VELVET_TOP_HAT: "Velvet Top Hat",
+}
 
 
 class SeymourBase(BaseModel):
     item_name: ItemName
     hex_color: str
+
+    @field_serializer("item_name")
+    def serialize_item_name(self, v: ItemName) -> str:
+        return ITEM_DISPLAY_NAMES[v]
 
 
 class SeymourCreate(SeymourBase):
