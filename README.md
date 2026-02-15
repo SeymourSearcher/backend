@@ -23,6 +23,10 @@ repeating hex: #E3E3E3
 sets with triple AxByCz on all pieces (A,B,C same)
 AxBxCx sets
 AABBCC pieces
+all 1,2,3,4,5,6 letter words
+eg 4 letter, repeat 
+99MEND99
+9MEND999
 
 0-1.999 t1
 2-4.999 t2

@@ -1,6 +1,6 @@
 from app.schemas.auth import DiscordCallback, TokenResponse
 from app.schemas.user import UserResponse
-from app.schemas.seymour import SeymourCreate, SeymourResponse, UploadResponse
+from app.schemas.seymour import SeymourCreate, SeymourResponse, UploadResponse, SeymourWithMatchResponse, MatchInfo
 
 __all__ = [
     "DiscordCallback",
@@ -9,6 +9,8 @@ __all__ = [
     "SeymourCreate",
     "SeymourResponse",
     "UploadResponse",
+    "SeymourWithMatchResponse",
+    "MatchInfo",
 ]
 
 

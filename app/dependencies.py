@@ -4,6 +4,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from jose import JWTError, jwt
+from redis.asyncio import Redis
 
 from app.database import async_session
 from app.config import get_settings
@@ -11,6 +12,15 @@ from app.models import User
 
 settings = get_settings()
 security = HTTPBearer()
+
+redis_client: Redis | None = None
+
+
+async def get_redis() -> Redis:
+    global redis_client
+    if redis_client is None:
+        redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+    return redis_client
 
 
 async def get_db():

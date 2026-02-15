@@ -36,6 +36,19 @@ class SeymourResponse(SeymourBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class MatchInfo(BaseModel):
+    target_name: str
+    target_hex: str
+    delta_e: float
+
+
+class SeymourWithMatchResponse(BaseModel):
+    id: int
+    item_name: str
+    hex_color: str
+    match: MatchInfo | None = None
+
+
 class UploadResponse(BaseModel):
     imported: int
     skipped: int

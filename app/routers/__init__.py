@@ -1,4 +1,4 @@
-from app.routers import auth, users, seymours
+from app.routers import auth, users, seymours, stats
 
-__all__ = ["auth", "users", "seymours"]
+__all__ = ["auth", "users", "seymours", "stats"]
 

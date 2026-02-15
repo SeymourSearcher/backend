@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     discord_client_secret: str
     discord_redirect_uri: str
     
+    redis_url: str = "redis://localhost:6379"
+    
     frontend_url: str = "http://localhost:3000"
 
     class Config:
