@@ -71,7 +71,7 @@ async def get_hex_info(
     users = result.scalars().all()
     
     user_seymours = {
-        user.id: (user, [(s.hex_color, s.item_name.value) for s in user.seymours])
+        user.id: (user, [(s.hex_color, s.item_name) for s in user.seymours])
         for user in users
     }
     
