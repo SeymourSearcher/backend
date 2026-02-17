@@ -15,7 +15,7 @@ USER_STATS_PREFIX = "user_stats:"
 USER_STATS_TTL = 1800
 
 RANKINGS_KEY = "rankings"
-RANKINGS_TTL = 1800
+RANKINGS_TTL = 900
 
 
 def _user_seymours_key(user_id: int) -> str:
