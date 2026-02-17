@@ -63,18 +63,42 @@ def get_tier_data(matches):
     return t1, t2, t3
 
 def get_stats(seymour_list, custom_sets=None):
-    matches = find_matching_seymours(seymour_list, KEY_ITEM_HEXES, threshold=10.0, best_only=True)
+    """Compute all stats in parallel using ThreadPoolExecutor."""
+    from concurrent.futures import as_completed
+    
+    futures = {}
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        # Heavy computations
+        futures['matches'] = executor.submit(
+            find_matching_seymours, seymour_list, KEY_ITEM_HEXES, threshold=10.0, best_only=True
+        )
+        futures['sets'] = executor.submit(find_sets, seymour_list)
+        if custom_sets is None:
+            futures['custom_sets'] = executor.submit(find_custom_sets, seymour_list)
+        
+        # Light computations
+        futures['stars'] = executor.submit(count_stars, seymour_list)
+        futures['words'] = executor.submit(count_words, seymour_list)
+        futures['dupes'] = executor.submit(count_dupes, seymour_list)
+        
+        # Gather results
+        matches = futures['matches'].result()
+        sets, dyed_sets = futures['sets'].result()
+        if custom_sets is None:
+            custom_sets = futures['custom_sets'].result()
+        stars = futures['stars'].result()
+        words = futures['words'].result()
+        dupes = futures['dupes'].result()
+    
     t1, t2, t3 = get_tier_data(matches)
-    sets, dyed_sets = find_sets(seymour_list)
-    if custom_sets is None:
-        custom_sets = find_custom_sets(seymour_list)
+    
     return {
-        "stars": count_stars(seymour_list),
+        "stars": stars,
         "t1": t1,
         "t2": t2,
         "t3": t3,
-        "words": count_words(seymour_list),
-        "dupes": count_dupes(seymour_list),
+        "words": words,
+        "dupes": dupes,
         "total_sets": len(sets),
         "dyed_sets": len(dyed_sets),
         "custom_sets": len(custom_sets),
