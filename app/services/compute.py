@@ -174,6 +174,29 @@ def _load_item_data():
 
 SETS, ITEM_TO_INFO, HEX_TO_ITEMS, KEY_ITEM_HEXES, FADE_DYES, FADE_DYE_HEXES, HEX_TO_DYE_STAGE, HEX_WORDS, ITEM_TO_SET = _load_item_data()
 
+UNIQUE_KEY_HEXES = list(dict.fromkeys(h for h, _ in KEY_ITEM_HEXES))
+KEY_ITEM_LABS = ALL_LAB[_hex_list_to_ints(UNIQUE_KEY_HEXES)]
+
+
+def find_top_hex_matches(hex_code: str, limit: int = 3) -> list[tuple[str, float]]:
+    search_lab = ALL_LAB[hex_to_int(hex_code)]
+    distances = delta_e(search_lab, KEY_ITEM_LABS)
+    top_indices = np.argpartition(distances, limit)[:limit]
+    top_indices = top_indices[np.argsort(distances[top_indices])]
+    return [(UNIQUE_KEY_HEXES[i], float(distances[i])) for i in top_indices]
+
+
+def find_users_near_hex(seymour_list: list[tuple[str, int]], target_hex: str, threshold: float = 10.0) -> list[tuple[str, int, float]]:
+    target_lab = ALL_LAB[hex_to_int(target_hex)]
+    hex_codes = [h for h, _ in seymour_list]
+    if not hex_codes:
+        return []
+    labs = ALL_LAB[_hex_list_to_ints(hex_codes)]
+    distances = delta_e(target_lab, labs)
+    mask = distances < threshold
+    indices = np.where(mask)[0]
+    return [(hex_codes[i], seymour_list[i][1], float(distances[i])) for i in indices]
+
 
 def _count_user_pieces(seymour_list):
     return Counter((hex_code, piece_idx) for hex_code, piece_idx in seymour_list)

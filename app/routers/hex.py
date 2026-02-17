@@ -8,8 +8,8 @@ from redis.asyncio import Redis
 
 from app.dependencies import get_db, get_redis
 from app.services.compute import (
-    get_lab, delta_e, ALL_LAB, 
-    KEY_ITEM_HEXES, HEX_TO_ITEMS, ITEM_TO_INFO, ITEM_TO_SET
+    find_top_hex_matches, find_users_near_hex,
+    HEX_TO_ITEMS, ITEM_TO_INFO, ITEM_TO_SET
 )
 from app.models import User, Seymour
 
@@ -40,38 +40,18 @@ def get_tier(de: float) -> str | None:
     return None
 
 
-def find_top_matches(hex_code: str, limit: int = 3) -> list[dict]:
-    search_lab = get_lab(hex_code)
-    
-    seen_items = {}
-    for target_hex, piece_idx in KEY_ITEM_HEXES:
-        if target_hex in seen_items:
-            continue
-        target_lab = get_lab(target_hex)
-        de = float(delta_e(search_lab, target_lab))
-        seen_items[target_hex] = de
-    
-    sorted_matches = sorted(seen_items.items(), key=lambda x: x[1])[:limit]
-    
-    results = []
-    for target_hex, de in sorted_matches:
-        item_names = HEX_TO_ITEMS.get(target_hex, [])
-        if not item_names:
-            continue
-        
-        item_name = item_names[0]
-        info = ITEM_TO_INFO.get(item_name, {})
-        set_name = ITEM_TO_SET.get(item_name, item_name)
-        pieces = [PIECE_NAMES[p] for p in info.get("pieces", [])]
-        
-        results.append({
-            "item_name": set_name,
-            "target_hex": target_hex,
-            "delta_e": round(de, 2),
-            "pieces": pieces,
-        })
-    
-    return results
+def build_match_info(target_hex: str, de: float) -> dict | None:
+    item_names = HEX_TO_ITEMS.get(target_hex, [])
+    if not item_names:
+        return None
+    item_name = item_names[0]
+    info = ITEM_TO_INFO.get(item_name, {})
+    return {
+        "item_name": ITEM_TO_SET.get(item_name, item_name),
+        "target_hex": target_hex,
+        "delta_e": round(de, 2),
+        "pieces": [PIECE_NAMES[p] for p in info.get("pieces", [])],
+    }
 
 
 @router.get("/{hex_code}")
@@ -81,36 +61,37 @@ async def get_hex_info(
     redis: Annotated[Redis, Depends(get_redis)]
 ):
     hex_code = validate_hex(hex_code)
-    top_matches = find_top_matches(hex_code, limit=3)
+    
+    raw_matches = find_top_hex_matches(hex_code, limit=3)
+    top_matches = [m for t, d in raw_matches if (m := build_match_info(t, d))]
     
     result = await db.execute(
         select(User).options(selectinload(User.seymours)).where(User.seymours.any())
     )
     users = result.scalars().all()
     
+    user_seymours = {
+        user.id: (user, [(s.hex_color, s.item_name.value) for s in user.seymours])
+        for user in users
+    }
+    
     for match in top_matches:
         target_hex = match["target_hex"]
-        target_lab = get_lab(target_hex)
         users_by_tier = {"t1": [], "t2": [], "t3": []}
         
-        for user in users:
-            best_de = None
-            for s in user.seymours:
-                seymour_lab = get_lab(s.hex_color)
-                de = float(delta_e(seymour_lab, target_lab))
-                if de < 10.0:
-                    if best_de is None or de < best_de:
-                        best_de = de
-            
-            if best_de is not None:
-                tier = get_tier(best_de)
-                if tier:
-                    users_by_tier[tier].append({
-                        "username": user.username,
-                        "discord_id": user.discord_id,
-                        "avatar_hash": user.avatar_hash,
-                        "delta_e": round(best_de, 2)
-                    })
+        for user_id, (user, seymour_list) in user_seymours.items():
+            nearby = find_users_near_hex(seymour_list, target_hex, threshold=10.0)
+            if not nearby:
+                continue
+            best_de = min(de for _, _, de in nearby)
+            tier = get_tier(best_de)
+            if tier:
+                users_by_tier[tier].append({
+                    "username": user.username,
+                    "discord_id": user.discord_id,
+                    "avatar_hash": user.avatar_hash,
+                    "delta_e": round(best_de, 2)
+                })
         
         for tier in users_by_tier:
             users_by_tier[tier].sort(key=lambda x: x["delta_e"])
