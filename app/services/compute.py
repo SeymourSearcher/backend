@@ -358,40 +358,55 @@ def _calc_avg_centroid_de(labs):
     return float(np.mean(np.sqrt(np.sum((labs - centroid) ** 2, axis=1))))
 
 
-def find_custom_sets(seymour_list, max_avg_delta_e=2.0):
-    """
-    Find 4-piece sets where avg Delta E < threshold.
-    Each piece appears in at most one set (the one with lowest delta E).
-    Uses avg distance to centroid for scoring.
-    """
-    from scipy.spatial import cKDTree
-    
+def _get_piece_labs(seymour_list):
     by_piece = _group_by_piece(seymour_list)
     pieces = [list(set(by_piece.get(i, []))) for i in range(4)]
     if not all(pieces):
+        return None, None
+    piece_ints = [np.array([int(h, 16) for h in p], dtype=np.uint32) for p in pieces]
+    piece_labs = [ALL_LAB[ints] for ints in piece_ints]
+    return pieces, piece_labs
+
+
+def _score_candidates(lab0, lab1, lab2, labs3_sub):
+    n = len(labs3_sub)
+    stacked = np.empty((n, 4, 3), dtype=np.float32)
+    stacked[:, 0, :] = lab0
+    stacked[:, 1, :] = lab1
+    stacked[:, 2, :] = lab2
+    stacked[:, 3, :] = labs3_sub
+    centroids = stacked.mean(axis=1, keepdims=True)
+    return np.sqrt(((stacked - centroids) ** 2).sum(axis=2)).mean(axis=1)
+
+
+def find_custom_sets(seymour_list, max_avg_delta_e=2.0):
+    from scipy.spatial import cKDTree
+    
+    pieces, piece_labs = _get_piece_labs(seymour_list)
+    if pieces is None:
         return []
     
-    piece_labs = [ALL_LAB[np.array([int(h, 16) for h in p], dtype=np.uint32)] for p in pieces]
-    
-    radius = max_avg_delta_e * 2.5
-    trees = [cKDTree(labs) for labs in piece_labs]
+    order = np.argsort([len(p) for p in pieces])
+    pieces = [pieces[i] for i in order]
+    piece_labs = [piece_labs[i] for i in order]
+    inv_order = np.argsort(order)
     
     labs0, labs1, labs2, labs3 = piece_labs
-    n0 = len(labs0)
+    trees = [cKDTree(labs) for labs in piece_labs]
+    radius = max_avg_delta_e * 2.5
     
     all_nearby_1 = trees[1].query_ball_point(labs0, radius)
     
     candidates = []
-    for i0 in range(n0):
-        nearby_1 = all_nearby_1[i0]
+    for i0, nearby_1 in enumerate(all_nearby_1):
         if not nearby_1:
             continue
         
         lab0 = labs0[i0]
-        nearby_1 = np.array(nearby_1, dtype=np.int32)
+        nearby_1 = np.asarray(nearby_1, dtype=np.int32)
         labs1_sub = labs1[nearby_1]
         
-        centroids_01 = (lab0 + labs1_sub) / 2
+        centroids_01 = (lab0 + labs1_sub) * 0.5
         all_nearby_2 = trees[2].query_ball_point(centroids_01, radius)
         
         for j1, i1 in enumerate(nearby_1):
@@ -400,7 +415,7 @@ def find_custom_sets(seymour_list, max_avg_delta_e=2.0):
                 continue
             
             lab1 = labs1[i1]
-            nearby_2 = np.array(nearby_2, dtype=np.int32)
+            nearby_2 = np.asarray(nearby_2, dtype=np.int32)
             labs2_sub = labs2[nearby_2]
             
             centroids_012 = (lab0 + lab1 + labs2_sub) / 3
@@ -411,23 +426,11 @@ def find_custom_sets(seymour_list, max_avg_delta_e=2.0):
                 if not nearby_3:
                     continue
                 
-                lab2 = labs2[i2]
-                nearby_3 = np.array(nearby_3, dtype=np.int32)
-                labs3_sub = labs3[nearby_3]
+                nearby_3 = np.asarray(nearby_3, dtype=np.int32)
+                avg_des = _score_candidates(lab0, lab1, labs2[i2], labs3[nearby_3])
                 
-                stacked = np.stack([
-                    np.broadcast_to(lab0, labs3_sub.shape),
-                    np.broadcast_to(lab1, labs3_sub.shape),
-                    np.broadcast_to(lab2, labs3_sub.shape),
-                    labs3_sub
-                ], axis=1)
-                
-                centroids = stacked.mean(axis=1)
-                diffs = stacked - centroids[:, np.newaxis, :]
-                avg_des = np.sqrt((diffs ** 2).sum(axis=2)).mean(axis=1)
-                
-                mask = avg_des < max_avg_delta_e
-                for idx in np.where(mask)[0]:
+                valid = np.where(avg_des < max_avg_delta_e)[0]
+                for idx in valid:
                     candidates.append((avg_des[idx], i0, i1, i2, nearby_3[idx]))
     
     if not candidates:
@@ -440,18 +443,20 @@ def find_custom_sets(seymour_list, max_avg_delta_e=2.0):
     for avg_de, i0, i1, i2, i3 in candidates:
         if i0 in used[0] or i1 in used[1] or i2 in used[2] or i3 in used[3]:
             continue
-        used[0].add(i0)
-        used[1].add(i1)
-        used[2].add(i2)
-        used[3].add(i3)
+        for s, i in zip(used, (i0, i1, i2, i3)):
+            s.add(i)
         
-        hexes = [pieces[0][i0], pieces[1][i1], pieces[2][i2], pieces[3][i3]]
-        labs = np.array([labs0[i0], labs1[i1], labs2[i2], labs3[i3]])
+        indices = [i0, i1, i2, i3]
+        hexes = [pieces[j][indices[j]] for j in range(4)]
+        labs = np.array([piece_labs[j][indices[j]] for j in range(4)])
         centroid = labs.mean(axis=0)
         piece_de = np.linalg.norm(labs - centroid, axis=1)
         
+        final_hexes = [hexes[inv_order[j]] for j in range(4)]
+        final_de = [piece_de[inv_order[j]] for j in range(4)]
+        
         results.append((f"Custom Set #{len(results) + 1}", float(avg_de),
-                       [(i, hexes[i], float(piece_de[i])) for i in range(4)]))
+                       [(j, final_hexes[j], float(final_de[j])) for j in range(4)]))
     
     return results
 
