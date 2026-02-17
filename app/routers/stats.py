@@ -23,10 +23,9 @@ router = APIRouter()
 
 @router.get("/")
 async def global_stats(
-    db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)]
 ):
-    return await get_global_stats(db, redis)
+    return await get_global_stats(redis)
 
 
 @router.get("/me")
