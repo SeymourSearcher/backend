@@ -135,11 +135,42 @@ def _schedule_custom_sets_background(redis: Redis, seymour_list: list, user_id: 
         pass
 
 
-async def get_global_stats(db: AsyncSession, redis: Redis) -> dict:
+def sum_rankings_stats(rankings: list[dict]) -> dict:
+    """Compute global stats by summing all user rankings data."""
+    return {
+        "stars": sum(r["stars"] for r in rankings),
+        "t1": sum(r["t1"] for r in rankings),
+        "t2": sum(r["t2"] for r in rankings),
+        "t3": sum(r["t3"] for r in rankings),
+        "words": sum(r["words"] for r in rankings),
+        "dupes": sum(r["dupes"] for r in rankings),
+        "total_sets": sum(r["total_sets"] for r in rankings),
+        "dyed_sets": sum(r["dyed_sets"] for r in rankings),
+        "custom_sets": sum(r["custom_sets"] for r in rankings),
+        "total_seymours": sum(r["total_seymours"] for r in rankings),
+    }
+
+
+async def get_global_stats(db: AsyncSession, redis: Redis, rankings: list[dict] | None = None) -> dict:
     cached = await get_cached_global_stats(redis)
     if cached:
         return cached
     
+    # If rankings provided, just sum them
+    if rankings:
+        stats = sum_rankings_stats(rankings)
+        await set_cached_global_stats(redis, stats)
+        return stats
+    
+    # Try to get cached rankings
+    from app.services.cache import get_cached_rankings
+    cached_rankings = await get_cached_rankings(redis)
+    if cached_rankings:
+        stats = sum_rankings_stats(cached_rankings)
+        await set_cached_global_stats(redis, stats)
+        return stats
+    
+    # Fallback: compute from all seymours (rankings not available yet)
     result = await db.execute(select(Seymour))
     seymours = result.scalars().all()
     seymour_list = [(s.hex_color, s.item_name) for s in seymours]

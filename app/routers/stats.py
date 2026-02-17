@@ -9,11 +9,12 @@ from sqlalchemy.orm import selectinload
 from redis.asyncio import Redis
 
 from app.dependencies import get_db, get_redis, get_current_user
-from app.services.stats import get_global_stats, get_stats, get_cached_or_compute_custom_sets, _schedule_custom_sets_background
+from app.services.stats import get_global_stats, get_stats, get_cached_or_compute_custom_sets, _schedule_custom_sets_background, sum_rankings_stats
 from app.services.cache import get_cached_custom_sets
 from app.services.cache import (
     get_cached_user_stats, set_cached_user_stats,
-    get_cached_rankings, set_cached_rankings
+    get_cached_rankings, set_cached_rankings,
+    set_cached_global_stats
 )
 from app.models import User, Seymour
 
@@ -89,5 +90,10 @@ async def get_rankings(
         rankings = list(await asyncio.gather(*tasks))
     
     await set_cached_rankings(redis, rankings)
+    
+    # Also update global stats from rankings
+    global_stats = sum_rankings_stats(rankings)
+    await set_cached_global_stats(redis, global_stats)
+    
     return rankings
 
