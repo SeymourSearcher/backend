@@ -1,4 +1,5 @@
 import re
+import asyncio
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,13 +63,17 @@ async def get_hex_info(
 ):
     hex_code = validate_hex(hex_code)
     
-    raw_matches = find_top_hex_matches(hex_code, limit=3)
-    top_matches = [m for t, d in raw_matches if (m := build_match_info(t, d))]
+    async def fetch_users():
+        result = await db.execute(
+            select(User).options(selectinload(User.seymours)).where(User.seymours.any())
+        )
+        return result.scalars().all()
     
-    result = await db.execute(
-        select(User).options(selectinload(User.seymours)).where(User.seymours.any())
+    raw_matches, users = await asyncio.gather(
+        asyncio.to_thread(find_top_hex_matches, hex_code, 3),
+        fetch_users()
     )
-    users = result.scalars().all()
+    top_matches = [m for t, d in raw_matches if (m := build_match_info(t, d))]
     
     user_seymours = {
         user.id: (user, [(s.hex_color, s.item_name) for s in user.seymours])
