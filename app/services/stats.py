@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from redis.asyncio import Redis
 
-from app.services.compute import find_matching_seymours, find_sets
+from app.services.compute import find_matching_seymours, find_sets, find_custom_sets
 from app.services.compute import KEY_ITEM_HEXES, HEX_WORDS
 from app.services.compute import seymour_converter
 from app.services.cache import get_cached_global_stats, set_cached_global_stats, invalidate_global_stats
@@ -58,14 +58,7 @@ def get_stats(seymour_list):
     matches = find_matching_seymours(seymour_list, KEY_ITEM_HEXES, threshold=10.0, best_only=True)
     t1, t2, t3 = get_tier_data(matches)
     sets, dyed_sets = find_sets(seymour_list)
-    #stars are 'cool' matches
-    #t1 is 0 - 2 delta e
-    #t2 is 2 - 5 delta e
-    #t3 is 5 - 10 delta e
-    #dupes are any item that has same colour as another item
-    #total_sets are where matches complete for each piece in a set
-    #dyed_sets are where matches complete for each piece in a set that are dyed
-    #total_seymours are the total number of seymours
+    custom_sets = find_custom_sets(seymour_list)
     return {
         "stars": count_stars(seymour_list),
         "t1": t1,
@@ -75,6 +68,7 @@ def get_stats(seymour_list):
         "dupes": count_dupes(seymour_list),
         "total_sets": len(sets),
         "dyed_sets": len(dyed_sets),
+        "custom_sets": len(custom_sets),
         "total_seymours": len(seymour_list),
     }
 

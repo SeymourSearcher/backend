@@ -22,7 +22,7 @@ from app.services.cache import (
     get_cached_user_seymours,
     set_cached_user_seymours,
 )
-from app.services.compute import find_matching_seymours, find_sets, find_incomplete_armor_sets, find_incomplete_dye_sets, KEY_ITEM_HEXES, HEX_TO_ITEMS, FADE_DYES, SETS, ITEM_TO_INFO, ITEM_TO_SET
+from app.services.compute import find_matching_seymours, find_sets, find_incomplete_armor_sets, find_incomplete_dye_sets, find_custom_sets, KEY_ITEM_HEXES, HEX_TO_ITEMS, FADE_DYES, SETS, ITEM_TO_INFO, ITEM_TO_SET
 from app.models import User, Seymour
 
 router = APIRouter()
@@ -214,6 +214,23 @@ def _filter_seymours_with_matches(seymours: list[Seymour], filter_type: str, sub
             if (key := (s.hex_color, s.item_name)) in match_info
         ]
     
+    if filter_type == "custom":
+        lookup = _build_seymour_lookup(seymours)
+        results = []
+        custom_sets = find_custom_sets(seymour_list, max_avg_delta_e=2.0)
+        
+        for set_name, avg_de, pieces in custom_sets:
+            for piece_idx, hex_color, piece_de in pieces:
+                key = (hex_color, piece_idx)
+                if key in lookup:
+                    match = {
+                        "target_name": set_name,
+                        "target_hex": hex_color,
+                        "delta_e": round(piece_de, 2)
+                    }
+                    results.append(_build_result(lookup[key][0], match))
+        return results
+    
     return [_build_result(s) for s in seymours]
 
 
@@ -271,7 +288,7 @@ def _sort_results(results: list[dict], sort: str, filter_type: str) -> list[dict
     
     reverse = sort == "desc"
     
-    if filter_type in ("sets", "dyes"):
+    if filter_type in ("sets", "dyes", "custom"):
         group_avgs = {}
         for r in results:
             name = r.get("match", {}).get("target_name", "")
@@ -305,15 +322,18 @@ async def list_seymours(
 ):
     filter_type = filter if filter and filter != "all" else "all"
     
-    cached = await get_cached_seymour_results(redis, user.id, filter_type, sub_filter, incomplete_only, include_dyes)
-    if cached is not None:
-        sorted_results = _sort_results(cached, sort, filter_type) if sort else cached
-        return sorted_results[skip:skip + limit]
+    if filter_type != "custom":
+        cached = await get_cached_seymour_results(redis, user.id, filter_type, sub_filter, incomplete_only, include_dyes)
+        if cached is not None:
+            sorted_results = _sort_results(cached, sort, filter_type) if sort else cached
+            return sorted_results[skip:skip + limit]
     
     seymours = await get_user_seymours(db, redis, user.id)
     
     filtered = _filter_seymours_with_matches(seymours, filter_type, sub_filter, incomplete_only, include_dyes)
-    await set_cached_seymour_results(redis, user.id, filter_type, sub_filter, incomplete_only, include_dyes, filtered)
+    
+    if filter_type != "custom":
+        await set_cached_seymour_results(redis, user.id, filter_type, sub_filter, incomplete_only, include_dyes, filtered)
     
     sorted_results = _sort_results(filtered, sort, filter_type) if sort else filtered
     return sorted_results[skip:skip + limit]
