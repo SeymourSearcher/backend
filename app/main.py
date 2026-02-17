@@ -6,7 +6,7 @@ from app.routers import auth, users, seymours, stats, hex
 
 settings = get_settings()
 
-app = FastAPI(title="Seymour Finder API")
+app = FastAPI(title="Seymour Searcher API")
 
 app.add_middleware(
     CORSMiddleware,
