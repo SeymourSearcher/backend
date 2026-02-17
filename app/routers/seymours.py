@@ -322,18 +322,16 @@ async def list_seymours(
 ):
     filter_type = filter if filter and filter != "all" else "all"
     
-    if filter_type != "custom":
-        cached = await get_cached_seymour_results(redis, user.id, filter_type, sub_filter, incomplete_only, include_dyes)
-        if cached is not None:
-            sorted_results = _sort_results(cached, sort, filter_type) if sort else cached
-            return sorted_results[skip:skip + limit]
+    cached = await get_cached_seymour_results(redis, user.id, filter_type, sub_filter, incomplete_only, include_dyes)
+    if cached is not None:
+        sorted_results = _sort_results(cached, sort, filter_type) if sort else cached
+        return sorted_results[skip:skip + limit]
     
     seymours = await get_user_seymours(db, redis, user.id)
     
     filtered = _filter_seymours_with_matches(seymours, filter_type, sub_filter, incomplete_only, include_dyes)
     
-    if filter_type != "custom":
-        await set_cached_seymour_results(redis, user.id, filter_type, sub_filter, incomplete_only, include_dyes, filtered)
+    await set_cached_seymour_results(redis, user.id, filter_type, sub_filter, incomplete_only, include_dyes, filtered)
     
     sorted_results = _sort_results(filtered, sort, filter_type) if sort else filtered
     return sorted_results[skip:skip + limit]
