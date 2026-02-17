@@ -40,6 +40,7 @@ class MatchInfo(BaseModel):
     target_name: str
     target_hex: str
     delta_e: float
+    missing: list[str] | None = None
 
 
 class SeymourWithMatchResponse(BaseModel):

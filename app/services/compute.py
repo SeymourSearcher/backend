@@ -83,14 +83,19 @@ def _group_by_piece(seymours):
 def _hex_list_to_ints(hex_list):
     return np.array([int(h, 16) for h in hex_list], dtype=np.uint32)
 
-def find_matching_seymours(user_seymours, key_item_hexes, threshold=10.0, best_only=False):
+def find_matching_seymours(user_seymours, key_item_hexes, threshold=10.0, best_only=False, include_dyes=False):
     """
     Finds user seymours within delta E threshold of target seymours (same piece type).
     Returns list of (user_seymour, target_seymour, delta_e_value).
     If best_only=True, returns only the closest match per user seymour.
+    If include_dyes=True, also matches against fade dye hexes.
     """
+    target_hexes = list(key_item_hexes)
+    if include_dyes:
+        target_hexes.extend(FADE_DYE_HEXES)
+    
     user_by_piece = _group_by_piece(user_seymours)
-    target_by_piece = _group_by_piece(key_item_hexes)
+    target_by_piece = _group_by_piece(target_hexes)
     
     threshold_sq = threshold * threshold
     results = []
