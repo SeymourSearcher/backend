@@ -1,4 +1,6 @@
+import asyncio
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from redis.asyncio import Redis
@@ -6,8 +8,14 @@ from redis.asyncio import Redis
 from app.services.compute import find_matching_seymours, find_sets, find_custom_sets
 from app.services.compute import KEY_ITEM_HEXES, HEX_WORDS
 from app.services.compute import seymour_converter
-from app.services.cache import get_cached_global_stats, set_cached_global_stats, invalidate_global_stats
+from app.services.cache import (
+    get_cached_global_stats, set_cached_global_stats,
+    get_cached_custom_sets, set_cached_custom_sets,
+    set_cached_user_stats
+)
 from app.models import Seymour
+
+_executor = ThreadPoolExecutor(max_workers=2)
 
 def count_dupes(seymour_list):
     counts = Counter(seymour_list)
@@ -54,11 +62,12 @@ def get_tier_data(matches):
             t3 += 1
     return t1, t2, t3
 
-def get_stats(seymour_list):
+def get_stats(seymour_list, custom_sets=None):
     matches = find_matching_seymours(seymour_list, KEY_ITEM_HEXES, threshold=10.0, best_only=True)
     t1, t2, t3 = get_tier_data(matches)
     sets, dyed_sets = find_sets(seymour_list)
-    custom_sets = find_custom_sets(seymour_list)
+    if custom_sets is None:
+        custom_sets = find_custom_sets(seymour_list)
     return {
         "stars": count_stars(seymour_list),
         "t1": t1,
@@ -73,6 +82,35 @@ def get_stats(seymour_list):
     }
 
 
+def _compute_custom_sets_sync(seymour_list):
+    return find_custom_sets(seymour_list)
+
+
+async def get_cached_or_compute_custom_sets(redis: Redis, seymour_list: list) -> list:
+    cached = await get_cached_custom_sets(redis, seymour_list)
+    if cached is not None:
+        return cached
+    loop = asyncio.get_running_loop()
+    custom_sets = await loop.run_in_executor(_executor, _compute_custom_sets_sync, seymour_list)
+    await set_cached_custom_sets(redis, seymour_list, custom_sets)
+    return custom_sets
+
+
+def _schedule_custom_sets_background(redis: Redis, seymour_list: list, user_id: int | None = None):
+    async def _bg_task():
+        custom_sets = await get_cached_or_compute_custom_sets(redis, seymour_list)
+        stats = get_stats(seymour_list, custom_sets=custom_sets)
+        if user_id is not None:
+            await set_cached_user_stats(redis, user_id, stats)
+        else:
+            await set_cached_global_stats(redis, stats)
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_bg_task())
+    except RuntimeError:
+        pass
+
+
 async def get_global_stats(db: AsyncSession, redis: Redis) -> dict:
     cached = await get_cached_global_stats(redis)
     if cached:
@@ -82,7 +120,13 @@ async def get_global_stats(db: AsyncSession, redis: Redis) -> dict:
     seymours = result.scalars().all()
     seymour_list = [(s.hex_color, s.item_name) for s in seymours]
     
-    stats = get_stats(seymour_list)
+    cached_custom = await get_cached_custom_sets(redis, seymour_list)
+    if cached_custom is not None:
+        stats = get_stats(seymour_list, custom_sets=cached_custom)
+    else:
+        _schedule_custom_sets_background(redis, seymour_list)
+        stats = get_stats(seymour_list, custom_sets=[])
+    
     await set_cached_global_stats(redis, stats)
     return stats
 

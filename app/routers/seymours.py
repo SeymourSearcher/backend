@@ -21,7 +21,9 @@ from app.services.cache import (
     set_cached_available_filters,
     get_cached_user_seymours,
     set_cached_user_seymours,
+    get_cached_custom_sets,
 )
+from app.services.stats import get_cached_or_compute_custom_sets
 from app.services.compute import find_matching_seymours, find_sets, find_incomplete_armor_sets, find_incomplete_dye_sets, find_custom_sets, KEY_ITEM_HEXES, HEX_TO_ITEMS, FADE_DYES, SETS, ITEM_TO_INFO, ITEM_TO_SET
 from app.models import User, Seymour
 
@@ -217,7 +219,7 @@ def _filter_seymours_with_matches(seymours: list[Seymour], filter_type: str, sub
     if filter_type == "custom":
         lookup = _build_seymour_lookup(seymours)
         results = []
-        custom_sets = find_custom_sets(seymour_list, max_avg_delta_e=2.0)
+        custom_sets = find_custom_sets(seymour_list, max_avg_delta_e=1.0)
         
         for set_name, avg_de, pieces in custom_sets:
             for piece_idx, hex_color, piece_de in pieces:

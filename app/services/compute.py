@@ -368,18 +368,34 @@ def _get_piece_labs(seymour_list):
     return pieces, piece_labs
 
 
-def _score_candidates(lab0, lab1, lab2, labs3_sub):
+def _score_candidates_batch(labs_fixed, labs3_sub):
     n = len(labs3_sub)
     stacked = np.empty((n, 4, 3), dtype=np.float32)
-    stacked[:, 0, :] = lab0
-    stacked[:, 1, :] = lab1
-    stacked[:, 2, :] = lab2
+    stacked[:, :3, :] = labs_fixed
     stacked[:, 3, :] = labs3_sub
     centroids = stacked.mean(axis=1, keepdims=True)
     return np.sqrt(((stacked - centroids) ** 2).sum(axis=2)).mean(axis=1)
 
 
-def find_custom_sets(seymour_list, max_avg_delta_e=2.0):
+def _greedy_select(candidates, threshold):
+    if not candidates:
+        return []
+    candidates.sort(key=lambda x: x[0])
+    used = [set() for _ in range(4)]
+    selected = []
+    for c in candidates:
+        if c[0] >= threshold:
+            break
+        indices = c[1:]
+        if any(indices[i] in used[i] for i in range(4)):
+            continue
+        for i in range(4):
+            used[i].add(indices[i])
+        selected.append(c)
+    return selected
+
+
+def find_custom_sets(seymour_list, max_avg_delta_e=1.0):
     from scipy.spatial import cKDTree
     
     pieces, piece_labs = _get_piece_labs(seymour_list)
@@ -393,7 +409,7 @@ def find_custom_sets(seymour_list, max_avg_delta_e=2.0):
     
     labs0, labs1, labs2, labs3 = piece_labs
     trees = [cKDTree(labs) for labs in piece_labs]
-    radius = max_avg_delta_e * 2.5
+    radius = max_avg_delta_e * 2.0
     
     all_nearby_1 = trees[1].query_ball_point(labs0, radius)
     
@@ -404,9 +420,8 @@ def find_custom_sets(seymour_list, max_avg_delta_e=2.0):
         
         lab0 = labs0[i0]
         nearby_1 = np.asarray(nearby_1, dtype=np.int32)
-        labs1_sub = labs1[nearby_1]
+        centroids_01 = (lab0 + labs1[nearby_1]) * 0.5
         
-        centroids_01 = (lab0 + labs1_sub) * 0.5
         all_nearby_2 = trees[2].query_ball_point(centroids_01, radius)
         
         for j1, i1 in enumerate(nearby_1):
@@ -416,9 +431,8 @@ def find_custom_sets(seymour_list, max_avg_delta_e=2.0):
             
             lab1 = labs1[i1]
             nearby_2 = np.asarray(nearby_2, dtype=np.int32)
-            labs2_sub = labs2[nearby_2]
+            centroids_012 = (lab0 + lab1 + labs2[nearby_2]) / 3
             
-            centroids_012 = (lab0 + lab1 + labs2_sub) / 3
             all_nearby_3 = trees[3].query_ball_point(centroids_012, radius)
             
             for j2, i2 in enumerate(nearby_2):
@@ -427,25 +441,17 @@ def find_custom_sets(seymour_list, max_avg_delta_e=2.0):
                     continue
                 
                 nearby_3 = np.asarray(nearby_3, dtype=np.int32)
-                avg_des = _score_candidates(lab0, lab1, labs2[i2], labs3[nearby_3])
+                labs_fixed = np.array([lab0, lab1, labs2[i2]], dtype=np.float32)
+                avg_des = _score_candidates_batch(labs_fixed, labs3[nearby_3])
                 
-                valid = np.where(avg_des < max_avg_delta_e)[0]
-                for idx in valid:
+                valid = avg_des < max_avg_delta_e
+                for idx in np.where(valid)[0]:
                     candidates.append((avg_des[idx], i0, i1, i2, nearby_3[idx]))
     
-    if not candidates:
-        return []
+    selected = _greedy_select(candidates, max_avg_delta_e)
     
-    candidates.sort(key=lambda x: x[0])
-    
-    used = [set() for _ in range(4)]
     results = []
-    for avg_de, i0, i1, i2, i3 in candidates:
-        if i0 in used[0] or i1 in used[1] or i2 in used[2] or i3 in used[3]:
-            continue
-        for s, i in zip(used, (i0, i1, i2, i3)):
-            s.add(i)
-        
+    for avg_de, i0, i1, i2, i3 in selected:
         indices = [i0, i1, i2, i3]
         hexes = [pieces[j][indices[j]] for j in range(4)]
         labs = np.array([piece_labs[j][indices[j]] for j in range(4)])

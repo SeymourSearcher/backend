@@ -1,4 +1,5 @@
 import json
+import hashlib
 from typing import Any
 from redis.asyncio import Redis
 
@@ -16,6 +17,18 @@ USER_STATS_TTL = 1800
 
 RANKINGS_KEY = "rankings"
 RANKINGS_TTL = 900
+
+CUSTOM_SETS_PREFIX = "custom_sets:"
+CUSTOM_SETS_TTL = 3600
+
+
+def _hash_seymour_list(seymour_list: list) -> str:
+    data = json.dumps(sorted(seymour_list), separators=(',', ':')).encode()
+    return hashlib.md5(data).hexdigest()
+
+
+def _custom_sets_key(seymour_hash: str) -> str:
+    return f"{CUSTOM_SETS_PREFIX}{seymour_hash}"
 
 
 def _user_seymours_key(user_id: int) -> str:
@@ -159,4 +172,14 @@ async def set_cached_rankings(redis: Redis, rankings: list[dict]) -> None:
 
 async def invalidate_rankings(redis: Redis) -> None:
     await invalidate(redis, RANKINGS_KEY)
+
+
+async def get_cached_custom_sets(redis: Redis, seymour_list: list) -> list | None:
+    key = _custom_sets_key(_hash_seymour_list(seymour_list))
+    return await get_cached(redis, key)
+
+
+async def set_cached_custom_sets(redis: Redis, seymour_list: list, custom_sets: list) -> None:
+    key = _custom_sets_key(_hash_seymour_list(seymour_list))
+    await set_cached(redis, key, custom_sets, CUSTOM_SETS_TTL)
 
