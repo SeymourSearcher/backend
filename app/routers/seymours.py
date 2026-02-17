@@ -14,6 +14,7 @@ from app.services.stats import is_star, _contains_word
 from app.services.cache import (
     invalidate_global_stats,
     invalidate_user_seymours,
+    invalidate_rankings,
     get_cached_seymour_results,
     set_cached_seymour_results,
     get_cached_available_filters,
@@ -346,6 +347,7 @@ async def upload_seymours(
     await db.commit()
     await invalidate_global_stats(redis)
     await invalidate_user_seymours(redis, user.id)
+    await invalidate_rankings(redis)
     
     return UploadResponse(imported=len(parsed), skipped=skipped)
 

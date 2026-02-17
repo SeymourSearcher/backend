@@ -157,3 +157,6 @@ async def get_cached_rankings(redis: Redis) -> list[dict] | None:
 async def set_cached_rankings(redis: Redis, rankings: list[dict]) -> None:
     await set_cached(redis, RANKINGS_KEY, rankings, RANKINGS_TTL)
 
+async def invalidate_rankings(redis: Redis) -> None:
+    await invalidate(redis, RANKINGS_KEY)
+

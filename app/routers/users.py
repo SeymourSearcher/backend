@@ -17,15 +17,3 @@ async def get_current_user_profile(
 ):
     return user
 
-
-@router.delete("/me")
-async def delete_account(
-    user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)]
-):
-    await invalidate_user_seymours(redis, user.id)
-    await db.delete(user)
-    await db.commit()
-    return {"detail": "Account deleted"}
-
