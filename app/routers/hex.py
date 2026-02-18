@@ -10,7 +10,7 @@ from redis.asyncio import Redis
 from app.dependencies import get_db, get_redis
 from app.services.compute import (
     find_top_hex_matches, find_users_near_hex,
-    HEX_TO_ITEMS, ITEM_TO_INFO, ITEM_TO_SET
+    HEX_TO_ITEMS, ITEM_TO_INFO, ITEM_TO_SET, HEX_TO_DYE_STAGE, FADE_DYES
 )
 from app.models import User, Seymour
 
@@ -41,25 +41,37 @@ def get_tier(de: float) -> str | None:
     return None
 
 
-def build_match_info(target_hex: str, de: float) -> dict | None:
+def build_match_info(target_hex: str, de: float, include_dyes: bool = False) -> dict | None:
     item_names = HEX_TO_ITEMS.get(target_hex, [])
-    if not item_names:
-        return None
-    item_name = item_names[0]
-    info = ITEM_TO_INFO.get(item_name, {})
-    return {
-        "item_name": ITEM_TO_SET.get(item_name, item_name),
-        "target_hex": target_hex,
-        "delta_e": round(de, 2),
-        "pieces": [PIECE_NAMES[p] for p in info.get("pieces", [])],
-    }
+    if item_names:
+        item_name = item_names[0]
+        info = ITEM_TO_INFO.get(item_name, {})
+        return {
+            "item_name": ITEM_TO_SET.get(item_name, item_name),
+            "target_hex": target_hex,
+            "delta_e": round(de, 2),
+            "pieces": [PIECE_NAMES[p] for p in info.get("pieces", [])],
+        }
+    
+    if include_dyes and target_hex in HEX_TO_DYE_STAGE:
+        dye_info = HEX_TO_DYE_STAGE[target_hex][0]
+        dye_name, stage = dye_info
+        return {
+            "item_name": f"{dye_name} ({stage})",
+            "target_hex": target_hex,
+            "delta_e": round(de, 2),
+            "pieces": PIECE_NAMES,
+        }
+    
+    return None
 
 
 @router.get("/{hex_code}")
 async def get_hex_info(
     hex_code: str,
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)]
+    redis: Annotated[Redis, Depends(get_redis)],
+    include_dyes: bool = False
 ):
     hex_code = validate_hex(hex_code)
     
@@ -70,10 +82,10 @@ async def get_hex_info(
         return result.scalars().all()
     
     raw_matches, users = await asyncio.gather(
-        asyncio.to_thread(find_top_hex_matches, hex_code, 3),
+        asyncio.to_thread(find_top_hex_matches, hex_code, 3, include_dyes),
         fetch_users()
     )
-    top_matches = [m for t, d in raw_matches if (m := build_match_info(t, d))]
+    top_matches = [m for t, d in raw_matches if (m := build_match_info(t, d, include_dyes))]
     
     user_seymours = {
         user.id: (user, [(s.hex_color, s.item_name) for s in user.seymours])

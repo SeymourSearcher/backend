@@ -177,25 +177,30 @@ SETS, ITEM_TO_INFO, HEX_TO_ITEMS, KEY_ITEM_HEXES, FADE_DYES, FADE_DYE_HEXES, HEX
 UNIQUE_KEY_HEXES = list(dict.fromkeys(h for h, _ in KEY_ITEM_HEXES))
 KEY_ITEM_LABS = ALL_LAB[_hex_list_to_ints(UNIQUE_KEY_HEXES)]
 
+UNIQUE_DYE_HEXES = list(dict.fromkeys(h for h, _ in FADE_DYE_HEXES))
+DYE_LABS = ALL_LAB[_hex_list_to_ints(UNIQUE_DYE_HEXES)]
 
-def find_top_hex_matches(hex_code: str, limit: int = 3) -> list[tuple[str, float]]:
-    search_lab = ALL_LAB[hex_to_int(hex_code)]
-    distances = delta_e(search_lab, KEY_ITEM_LABS)
-    top_indices = np.argpartition(distances, limit)[:limit]
-    top_indices = top_indices[np.argsort(distances[top_indices])]
-    return [(UNIQUE_KEY_HEXES[i], float(distances[i])) for i in top_indices]
+UNIQUE_ALL_HEXES = list(dict.fromkeys(UNIQUE_KEY_HEXES + UNIQUE_DYE_HEXES))
+ALL_ITEM_LABS = ALL_LAB[_hex_list_to_ints(UNIQUE_ALL_HEXES)]
+
+
+def _get_top_indices(distances: np.ndarray, limit: int) -> np.ndarray:
+    top = np.argpartition(distances, limit)[:limit]
+    return top[np.argsort(distances[top])]
+
+
+def find_top_hex_matches(hex_code: str, limit: int = 3, include_dyes: bool = False) -> list[tuple[str, float]]:
+    hex_list, labs = (UNIQUE_ALL_HEXES, ALL_ITEM_LABS) if include_dyes else (UNIQUE_KEY_HEXES, KEY_ITEM_LABS)
+    distances = delta_e(get_lab(hex_code), labs)
+    return [(hex_list[i], float(distances[i])) for i in _get_top_indices(distances, limit)]
 
 
 def find_users_near_hex(seymour_list: list[tuple[str, int]], target_hex: str, threshold: float = 10.0) -> list[tuple[str, int, float]]:
-    target_lab = ALL_LAB[hex_to_int(target_hex)]
-    hex_codes = [h for h, _ in seymour_list]
-    if not hex_codes:
+    if not seymour_list:
         return []
-    labs = ALL_LAB[_hex_list_to_ints(hex_codes)]
-    distances = delta_e(target_lab, labs)
-    mask = distances < threshold
-    indices = np.where(mask)[0]
-    return [(hex_codes[i], seymour_list[i][1], float(distances[i])) for i in indices]
+    hex_codes = [h for h, _ in seymour_list]
+    distances = delta_e(get_lab(target_hex), ALL_LAB[_hex_list_to_ints(hex_codes)])
+    return [(hex_codes[i], seymour_list[i][1], float(distances[i])) for i in np.where(distances < threshold)[0]]
 
 
 def _count_user_pieces(seymour_list):
