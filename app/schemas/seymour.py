@@ -3,17 +3,19 @@ from pydantic import BaseModel, ConfigDict, field_serializer
 
 
 class ItemName(IntEnum):
-    CASHMERE_JACKET = 0
-    OXFORD_SHOES = 1
+    VELVET_TOP_HAT = 0
+    CASHMERE_JACKET = 1
     SATIN_TROUSERS = 2
-    VELVET_TOP_HAT = 3
+    OXFORD_SHOES = 3
+    
 
 
 ITEM_DISPLAY_NAMES = {
-    ItemName.CASHMERE_JACKET: "Cashmere Jacket",
-    ItemName.OXFORD_SHOES: "Oxford Shoes",
-    ItemName.SATIN_TROUSERS: "Satin Trousers",
     ItemName.VELVET_TOP_HAT: "Velvet Top Hat",
+    ItemName.CASHMERE_JACKET: "Cashmere Jacket",
+    ItemName.SATIN_TROUSERS: "Satin Trousers",
+    ItemName.OXFORD_SHOES: "Oxford Shoes",
+    
 }
 
 

@@ -91,7 +91,6 @@ async def get_hex_info(
         user.id: (user, [(s.hex_color, s.item_name) for s in user.seymours])
         for user in users
     }
-    
     for match in top_matches:
         target_hex = match["target_hex"]
         users_by_tier = {"t1": [], "t2": [], "t3": []}
@@ -109,10 +108,8 @@ async def get_hex_info(
                     "avatar_hash": user.avatar_hash,
                     "delta_e": round(best_de, 2)
                 })
-        
         for tier in users_by_tier:
             users_by_tier[tier].sort(key=lambda x: x["delta_e"])
-        
         match["users_by_tier"] = users_by_tier
     
     return {

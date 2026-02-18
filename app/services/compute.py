@@ -183,6 +183,20 @@ DYE_LABS = ALL_LAB[_hex_list_to_ints(UNIQUE_DYE_HEXES)]
 UNIQUE_ALL_HEXES = list(dict.fromkeys(UNIQUE_KEY_HEXES + UNIQUE_DYE_HEXES))
 ALL_ITEM_LABS = ALL_LAB[_hex_list_to_ints(UNIQUE_ALL_HEXES)]
 
+def _build_hex_to_pieces():
+    mapping = {}
+    for hex_code, piece_idx in KEY_ITEM_HEXES:
+        mapping.setdefault(hex_code, set()).add(piece_idx)
+    for hex_code in UNIQUE_DYE_HEXES:
+        mapping[hex_code] = {0, 1, 2, 3}
+    return mapping
+
+HEX_TO_PIECES = _build_hex_to_pieces()
+
+
+def _hex_to_targets(hex_code: str) -> list[tuple[str, int]]:
+    return [(hex_code, p) for p in HEX_TO_PIECES.get(hex_code, {0, 1, 2, 3})]
+
 
 def _get_top_indices(distances: np.ndarray, limit: int) -> np.ndarray:
     top = np.argpartition(distances, limit)[:limit]
@@ -196,11 +210,8 @@ def find_top_hex_matches(hex_code: str, limit: int = 3, include_dyes: bool = Fal
 
 
 def find_users_near_hex(seymour_list: list[tuple[str, int]], target_hex: str, threshold: float = 10.0) -> list[tuple[str, int, float]]:
-    if not seymour_list:
-        return []
-    hex_codes = [h for h, _ in seymour_list]
-    distances = delta_e(get_lab(target_hex), ALL_LAB[_hex_list_to_ints(hex_codes)])
-    return [(hex_codes[i], seymour_list[i][1], float(distances[i])) for i in np.where(distances < threshold)[0]]
+    matches = find_matching_seymours(seymour_list, _hex_to_targets(target_hex), threshold=threshold)
+    return [(user_hex, piece, de) for (user_hex, piece), _, de in matches]
 
 
 def _count_user_pieces(seymour_list):
@@ -500,36 +511,9 @@ if __name__ == "__main__":
     # Add backend to path so absolute imports work
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
     
-    from app.services.parser import parse_seymour_file
+    seymours = json.load(open(r"C:\Users\hexay\SeymourSearcher\seymour_list.json"))
+    target = [('D91E41', 1)]
 
-    with open(r"C:\Users\Hexay\Downloads\AllyMe's Export 2.9.2026.txt", 'r') as f:
-        content = f.read()
-        parsed, skipped = parse_seymour_file(content)
-        seymour_list = seymour_converter(parsed)
-        print(len(seymour_list))
-        print(seymour_list[:10])    
-    matches = find_matching_seymours(seymour_list, KEY_ITEM_HEXES, threshold=5.0, best_only=True)
-    print(f"\nFound {len(matches)} matches with delta E < 5")
-    for user_s, target_s, de in matches[:10]:
-        print(f"  {user_s} -> {target_s} (ΔE={de:.2f})")
-    
-    armor_sets, dye_sets = find_sets(seymour_list, threshold=5.0)
-    
-    print(f"\nFound {len(armor_sets)} complete armor sets:")
-    for set_name, pieces in armor_sets[:10]:
-        max_de = max(p[3] for p in pieces)
-        print(f"  {set_name} (worst ΔE={max_de:.2f})")
-        for item_name, piece_idx, user_hex, de in pieces:
-            piece_name = ['helmet', 'chestplate', 'leggings', 'boots'][piece_idx]
-            print(f"    {item_name} {piece_name}: {user_hex} (ΔE={de:.2f})")
-    
-    print(f"\nFound {len(dye_sets)} complete fade dye sets:")
-    for dye_name, stage, pieces in dye_sets[:10]:
-        max_de = max(p[2] for p in pieces)
-        print(f"  {dye_name} Stage {stage} (worst ΔE={max_de:.2f})")
-        for piece_idx, user_hex, de in pieces:
-            piece_name = ['helmet', 'chestplate', 'leggings', 'boots'][piece_idx]
-            print(f"    {piece_name}: {user_hex} (ΔE={de:.2f})")
-
-    
+    matches = find_matching_seymours(seymours, target, threshold=10.0, best_only=True)
+    print(matches)
 
