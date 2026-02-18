@@ -236,7 +236,7 @@ def _filter_seymours_with_matches(seymours: list[Seymour], filter_type: str, sub
     return [_build_result(s) for s in seymours]
 
 
-def _get_available_tier_items(seymour_list: list[tuple], tier: str, include_dyes: bool = False) -> list[str]:
+def _get_available_tier_items(seymour_list: list[tuple], tier: str | None, include_dyes: bool = False) -> list[str]:
     match_info = _get_matches(seymour_list, tier=tier, include_dyes=include_dyes)
     return sorted({m["target_name"] for m in match_info.values()})
 
@@ -250,7 +250,7 @@ async def get_available_filters(
     incomplete_only: bool = Query(False),
     include_dyes: bool = Query(False)
 ):
-    if filter in ("sets", "all"):
+    if filter == "sets":
         return sorted(SETS.keys())
     if filter == "dyes":
         return sorted(FADE_DYES.keys())
@@ -275,7 +275,10 @@ def _compute_available_filters(seymour_list: list[tuple], filter_type: str, inco
     if filter_type in TIER_THRESHOLDS:
         return _get_available_tier_items(seymour_list, filter_type, include_dyes)
     
-    if filter_type in ("sets", "all"):
+    if filter_type == "all":
+        return _get_available_tier_items(seymour_list, tier=None, include_dyes=include_dyes)
+    
+    if filter_type == "sets":
         return sorted(SETS.keys())
     
     if filter_type == "dyes":
