@@ -14,8 +14,11 @@ def count_dupes(seymour_list):
     counts = Counter(seymour_list)
     return sum(c - 1 for c in counts.values() if c > 1)
 
+HEX_SEQUENCE = "0123456789ABCDEF"
+HEX_SEQUENCE_REV = HEX_SEQUENCE[::-1]
+
 def _is_sequential(h):
-    return h == "123456" or h == "654321" or h == "012345" or h == "543210"
+    return h in HEX_SEQUENCE or h in HEX_SEQUENCE_REV
 
 def _is_repeating(h):
     return h[0:2] == h[2:4] == h[4:6]
@@ -25,6 +28,9 @@ def _is_aabbcc(h):
 
 def _is_triple_pattern(h):
     return h[0] == h[2] == h[4] and h[1] == h[3] == h[5]
+
+def _is_palindrome(h):
+    return h == h[::-1]
 
 def _contains_word(h):
     for word in HEX_WORDS:
