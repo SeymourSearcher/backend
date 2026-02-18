@@ -22,8 +22,8 @@ from app.services.cache import (
     get_cached_user_seymours,
     set_cached_user_seymours,
     get_cached_custom_sets,
+    set_cached_custom_sets,
 )
-from app.services.stats import get_cached_or_compute_custom_sets
 from app.services.compute import find_matching_seymours, find_sets, find_incomplete_armor_sets, find_incomplete_dye_sets, find_custom_sets, KEY_ITEM_HEXES, HEX_TO_ITEMS, FADE_DYES, SETS, ITEM_TO_INFO, ITEM_TO_SET
 from app.models import User, Seymour
 
@@ -109,7 +109,7 @@ def _build_seymour_lookup(seymours: list[Seymour]) -> dict:
     return lookup
 
 
-def _filter_seymours_with_matches(seymours: list[Seymour], filter_type: str, sub_filter: Optional[str] = None, incomplete_only: bool = False, include_dyes: bool = False) -> list[dict]:
+def _filter_seymours_with_matches(seymours: list[Seymour], filter_type: str, sub_filter: Optional[str] = None, incomplete_only: bool = False, include_dyes: bool = False, custom_sets_cache: Optional[list] = None) -> list[dict]:
     seymour_list = [(s.hex_color, s.item_name) for s in seymours]
     
     if filter_type == "stars":
@@ -219,7 +219,7 @@ def _filter_seymours_with_matches(seymours: list[Seymour], filter_type: str, sub
     if filter_type == "custom":
         lookup = _build_seymour_lookup(seymours)
         results = []
-        custom_sets = find_custom_sets(seymour_list, max_avg_delta_e=1.0)
+        custom_sets = custom_sets_cache if custom_sets_cache is not None else []
         
         for set_name, avg_de, pieces in custom_sets:
             for piece_idx, hex_color, piece_de in pieces:
@@ -331,7 +331,15 @@ async def list_seymours(
     
     seymours = await get_user_seymours(db, redis, user.id)
     
-    filtered = _filter_seymours_with_matches(seymours, filter_type, sub_filter, incomplete_only, include_dyes)
+    custom_sets_data = None
+    if filter_type == "custom":
+        seymour_list = [(s.hex_color, s.item_name) for s in seymours]
+        custom_sets_data = await get_cached_custom_sets(redis, seymour_list)
+        if custom_sets_data is None:
+            custom_sets_data = find_custom_sets(seymour_list, max_avg_delta_e=1.0)
+            await set_cached_custom_sets(redis, seymour_list, custom_sets_data)
+    
+    filtered = _filter_seymours_with_matches(seymours, filter_type, sub_filter, incomplete_only, include_dyes, custom_sets_data)
     
     await set_cached_seymour_results(redis, user.id, filter_type, sub_filter, incomplete_only, include_dyes, filtered)
     

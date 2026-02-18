@@ -1,18 +1,14 @@
-import asyncio
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from redis.asyncio import Redis
 
-from app.services.compute import find_matching_seymours, find_sets, find_custom_sets
+from app.services.compute import find_matching_seymours, find_sets
 from app.services.compute import KEY_ITEM_HEXES, HEX_WORDS
 from app.services.compute import seymour_converter
 from app.services.cache import (
     get_cached_global_stats, set_cached_global_stats,
-    get_cached_custom_sets, set_cached_custom_sets,
     set_cached_user_stats
 )
-
-_executor = ThreadPoolExecutor(max_workers=2)
 
 def count_dupes(seymour_list):
     counts = Counter(seymour_list)
@@ -59,30 +55,20 @@ def get_tier_data(matches):
             t3 += 1
     return t1, t2, t3
 
-def get_stats(seymour_list, custom_sets=None):
+def get_stats(seymour_list):
     """Compute all stats in parallel using ThreadPoolExecutor."""
-    from concurrent.futures import as_completed
-    
     futures = {}
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        # Heavy computations
+    with ThreadPoolExecutor(max_workers=5) as executor:
         futures['matches'] = executor.submit(
             find_matching_seymours, seymour_list, KEY_ITEM_HEXES, threshold=10.0, best_only=True
         )
         futures['sets'] = executor.submit(find_sets, seymour_list)
-        if custom_sets is None:
-            futures['custom_sets'] = executor.submit(find_custom_sets, seymour_list)
-        
-        # Light computations
         futures['stars'] = executor.submit(count_stars, seymour_list)
         futures['words'] = executor.submit(count_words, seymour_list)
         futures['dupes'] = executor.submit(count_dupes, seymour_list)
         
-        # Gather results
         matches = futures['matches'].result()
         sets, dyed_sets = futures['sets'].result()
-        if custom_sets is None:
-            custom_sets = futures['custom_sets'].result()
         stars = futures['stars'].result()
         words = futures['words'].result()
         dupes = futures['dupes'].result()
@@ -98,38 +84,10 @@ def get_stats(seymour_list, custom_sets=None):
         "dupes": dupes,
         "total_sets": len(sets),
         "dyed_sets": len(dyed_sets),
-        "custom_sets": len(custom_sets),
         "total_seymours": len(seymour_list),
     }
 
 
-def _compute_custom_sets_sync(seymour_list):
-    return find_custom_sets(seymour_list)
-
-
-async def get_cached_or_compute_custom_sets(redis: Redis, seymour_list: list) -> list:
-    cached = await get_cached_custom_sets(redis, seymour_list)
-    if cached is not None:
-        return cached
-    loop = asyncio.get_running_loop()
-    custom_sets = await loop.run_in_executor(_executor, _compute_custom_sets_sync, seymour_list)
-    await set_cached_custom_sets(redis, seymour_list, custom_sets)
-    return custom_sets
-
-
-def _schedule_custom_sets_background(redis: Redis, seymour_list: list, user_id: int | None = None):
-    async def _bg_task():
-        custom_sets = await get_cached_or_compute_custom_sets(redis, seymour_list)
-        stats = get_stats(seymour_list, custom_sets=custom_sets)
-        if user_id is not None:
-            await set_cached_user_stats(redis, user_id, stats)
-        else:
-            await set_cached_global_stats(redis, stats)
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_bg_task())
-    except RuntimeError:
-        pass
 
 
 def sum_rankings_stats(rankings: list[dict]) -> dict:
@@ -143,7 +101,6 @@ def sum_rankings_stats(rankings: list[dict]) -> dict:
         "dupes": sum(r["dupes"] for r in rankings),
         "total_sets": sum(r["total_sets"] for r in rankings),
         "dyed_sets": sum(r["dyed_sets"] for r in rankings),
-        "custom_sets": sum(r["custom_sets"] for r in rankings),
         "total_seymours": sum(r["total_seymours"] for r in rankings),
     }
 
@@ -177,7 +134,6 @@ async def get_global_stats(redis: Redis, rankings: list[dict] | None = None) -> 
         "dupes": 0,
         "total_sets": 0,
         "dyed_sets": 0,
-        "custom_sets": 0,
         "total_seymours": 0,
     }
 

@@ -9,8 +9,7 @@ from sqlalchemy.orm import selectinload
 from redis.asyncio import Redis
 
 from app.dependencies import get_db, get_redis, get_current_user
-from app.services.stats import get_global_stats, get_stats, get_cached_or_compute_custom_sets, _schedule_custom_sets_background, sum_rankings_stats
-from app.services.cache import get_cached_custom_sets
+from app.services.stats import get_global_stats, get_stats, sum_rankings_stats
 from app.services.cache import (
     get_cached_user_stats, set_cached_user_stats,
     get_cached_rankings, set_cached_rankings,
@@ -42,19 +41,14 @@ async def user_stats(
     seymours = result.scalars().all()
     seymour_list = [(s.hex_color, s.item_name) for s in seymours]
     
-    cached_custom = await get_cached_custom_sets(redis, seymour_list)
-    if cached_custom is not None:
-        stats = get_stats(seymour_list, custom_sets=cached_custom)
-        await set_cached_user_stats(redis, user.id, stats)
-    else:
-        _schedule_custom_sets_background(redis, seymour_list, user_id=user.id)
-        stats = get_stats(seymour_list, custom_sets=[])
+    stats = get_stats(seymour_list)
+    await set_cached_user_stats(redis, user.id, stats)
     
     return stats
 
 
-def _compute_user_ranking(user_data: dict, seymour_list: list, custom_sets: list | None = None) -> dict:
-    stats = get_stats(seymour_list, custom_sets=custom_sets)
+def _compute_user_ranking(user_data: dict, seymour_list: list) -> dict:
+    stats = get_stats(seymour_list)
     return {**user_data, **stats}
 
 
