@@ -72,11 +72,16 @@ class HexCriteriaResponse(BaseModel):
 
 
 class OrderUserResponse(BaseModel):
-    discord_id: int
+    discord_id: str
     username: str
     avatar_hash: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("discord_id", mode="before")
+    @classmethod
+    def coerce_discord_id(cls, v):
+        return str(v)
 
 
 class BuyOrderResponse(BaseModel):

@@ -62,7 +62,7 @@ async def compute_and_cache_rankings(db: AsyncSession, redis: Redis) -> list[dic
     
     user_data_list = [
         (
-            {"discord_id": u.discord_id, "username": u.username, "avatar_hash": u.avatar_hash},
+            {"discord_id": str(u.discord_id), "username": u.username, "avatar_hash": u.avatar_hash},
             [(s.hex_color, s.item_name) for s in u.seymours]
         )
         for u in users

@@ -104,7 +104,7 @@ async def get_hex_info(
             if tier:
                 users_by_tier[tier].append({
                     "username": user.username,
-                    "discord_id": user.discord_id,
+                    "discord_id": str(user.discord_id),
                     "avatar_hash": user.avatar_hash,
                     "delta_e": round(best_de, 2)
                 })

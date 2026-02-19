@@ -349,7 +349,7 @@ def build_sell_order_response(order: SellOrder) -> dict:
             "match": match,
         },
         "user": {
-            "discord_id": order.user.discord_id,
+            "discord_id": str(order.user.discord_id),
             "username": order.user.username,
             "avatar_hash": order.user.avatar_hash,
         } if order.user else None,
