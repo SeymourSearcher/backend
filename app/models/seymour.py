@@ -24,4 +24,5 @@ class Seymour(Base):
     hex_color: Mapped[str] = mapped_column(String(6))
 
     user: Mapped["User"] = relationship(back_populates="seymours")
+    sell_order: Mapped["SellOrder"] = relationship(back_populates="seymour", uselist=False)
 

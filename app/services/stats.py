@@ -111,7 +111,7 @@ def sum_rankings_stats(rankings: list[dict]) -> dict:
     }
 
 
-async def get_global_stats(redis: Redis, rankings: list[dict] | None = None) -> dict:
+async def get_global_stats(redis: Redis, db=None, rankings: list[dict] | None = None) -> dict:
     cached = await get_cached_global_stats(redis)
     if cached:
         return cached
@@ -130,7 +130,13 @@ async def get_global_stats(redis: Redis, rankings: list[dict] | None = None) -> 
         await set_cached_global_stats(redis, stats)
         return stats
     
-    # No rankings available yet - return empty stats
+    # No cached data - recompute rankings if db available
+    if db:
+        from app.routers.stats import compute_and_cache_rankings
+        rankings = await compute_and_cache_rankings(db, redis)
+        return sum_rankings_stats(rankings)
+    
+    # No db available - return empty stats
     return {
         "stars": 0,
         "t1": 0,

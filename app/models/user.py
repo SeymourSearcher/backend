@@ -17,4 +17,6 @@ class User(Base):
     last_uploaded: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     seymours: Mapped[list["Seymour"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    buy_orders: Mapped[list["BuyOrder"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    sell_orders: Mapped[list["SellOrder"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 

@@ -22,9 +22,10 @@ router = APIRouter()
 
 @router.get("/")
 async def global_stats(
+    db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)]
 ):
-    return await get_global_stats(redis)
+    return await get_global_stats(redis, db)
 
 
 @router.get("/me")
@@ -52,15 +53,8 @@ def _compute_user_ranking(user_data: dict, seymour_list: list) -> dict:
     return {**user_data, **stats}
 
 
-@router.get("/rankings")
-async def get_rankings(
-    db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)]
-):
-    cached = await get_cached_rankings(redis)
-    if cached:
-        return cached
-    
+async def compute_and_cache_rankings(db: AsyncSession, redis: Redis) -> list[dict]:
+    """Compute rankings from database and cache them along with global stats."""
     result = await db.execute(
         select(User).options(selectinload(User.seymours)).where(User.seymours.any())
     )
@@ -89,4 +83,16 @@ async def get_rankings(
     await set_cached_global_stats(redis, global_stats)
     
     return rankings
+
+
+@router.get("/rankings")
+async def get_rankings(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)]
+):
+    cached = await get_cached_rankings(redis)
+    if cached:
+        return cached
+    
+    return await compute_and_cache_rankings(db, redis)
 
