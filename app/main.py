@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 
 from app.config import get_settings
 from app.routers import auth, users, seymours, stats, hex, marketplace
@@ -22,6 +23,16 @@ app.include_router(seymours.router, prefix="/seymours", tags=["seymours"])
 app.include_router(stats.router, prefix="/stats", tags=["stats"])
 app.include_router(hex.router, prefix="/hex", tags=["hex"])
 app.include_router(marketplace.router, prefix="/marketplace", tags=["marketplace"])
+
+
+ROBOTS_TXT = """User-agent: *
+Disallow: /
+"""
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+async def robots():
+    return ROBOTS_TXT
 
 
 @app.get("/health")
