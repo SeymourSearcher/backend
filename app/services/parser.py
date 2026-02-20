@@ -1,3 +1,4 @@
+import json
 import re
 from app.schemas.seymour import SeymourCreate, ItemName, ITEM_DISPLAY_NAMES
 
@@ -93,7 +94,49 @@ def parse_seymour_line(line: str) -> SeymourCreate | None:
     return parse_pipe_format_line(line)
 
 
+def parse_json_format(content: str) -> tuple[list[SeymourCreate], int] | None:
+    """Parse JSON format with UUID keys containing pieceName and hexcode."""
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    
+    if not isinstance(data, dict):
+        return None
+    
+    parsed = []
+    skipped = 0
+    
+    for entry in data.values():
+        if not isinstance(entry, dict):
+            skipped += 1
+            continue
+        
+        piece_name = entry.get("pieceName")
+        hex_code = entry.get("hexcode", "").lstrip("#")
+        
+        if not piece_name or not hex_code:
+            skipped += 1
+            continue
+        
+        item_name = DISPLAY_TO_ITEM.get(piece_name)
+        if item_name is None:
+            skipped += 1
+            continue
+        
+        parsed.append(SeymourCreate(item_name=item_name, hex_color=hex_code))
+    
+    return parsed, skipped
+
+
 def parse_seymour_file(content: str) -> tuple[list[SeymourCreate], int]:
+    content = content.strip()
+    
+    if content.startswith("{"):
+        result = parse_json_format(content)
+        if result:
+            return result
+    
     lines = content.splitlines()
     parsed = []
     skipped = 0
