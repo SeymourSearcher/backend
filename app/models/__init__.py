@@ -11,6 +11,7 @@ from app.models.marketplace import (
     Tier,
 )
 from app.models.auction import ActiveAuction, EndedAuction, Bid
+from app.models.player import Player
 
 __all__ = [
     "User",
@@ -26,5 +27,6 @@ __all__ = [
     "ActiveAuction",
     "EndedAuction",
     "Bid",
+    "Player",
 ]
 

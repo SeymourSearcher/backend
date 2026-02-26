@@ -14,6 +14,7 @@ from app.schemas.auction import (
     EndedAuctionListResponse,
 )
 from app.services.compute import get_lab, delta_e, find_top_hex_matches, SETS, ITEM_TO_INFO
+from app.services.player import get_player_names
 
 router = APIRouter()
 
@@ -123,6 +124,11 @@ async def list_active_auctions(
     total = len(sorted_auctions)
     paginated = sorted_auctions[skip:skip + limit]
     
+    seller_uuids = list({a.seller_uuid for a in paginated})
+    names = await get_player_names(db, seller_uuids)
+    for auction in paginated:
+        auction.seller_name = names.get(auction.seller_uuid)
+    
     return ActiveAuctionListResponse(auctions=paginated, total=total)
 
 
@@ -153,6 +159,12 @@ async def list_ended_auctions(
     total = len(sorted_auctions)
     paginated = sorted_auctions[skip:skip + limit]
     
+    all_uuids = list({a.seller_uuid for a in paginated} | {a.buyer_uuid for a in paginated})
+    names = await get_player_names(db, all_uuids)
+    for auction in paginated:
+        auction.seller_name = names.get(auction.seller_uuid)
+        auction.buyer_name = names.get(auction.buyer_uuid)
+    
     return EndedAuctionListResponse(auctions=paginated, total=total)
 
 
@@ -176,7 +188,10 @@ async def get_active_auction(
     if not auction:
         raise HTTPException(status_code=404, detail="Auction not found")
     
-    return enrich_auction(auction, ActiveAuctionDetailResponse)
+    enriched = enrich_auction(auction, ActiveAuctionDetailResponse)
+    names = await get_player_names(db, [auction.seller_uuid])
+    enriched.seller_name = names.get(auction.seller_uuid)
+    return enriched
 
 
 @router.get("/ended/{auction_id}", response_model=EndedAuctionResponse)
@@ -192,4 +207,8 @@ async def get_ended_auction(
     if not auction:
         raise HTTPException(status_code=404, detail="Auction not found")
     
-    return enrich_auction(auction, EndedAuctionResponse)
+    enriched = enrich_auction(auction, EndedAuctionResponse)
+    names = await get_player_names(db, [auction.seller_uuid, auction.buyer_uuid])
+    enriched.seller_name = names.get(auction.seller_uuid)
+    enriched.buyer_name = names.get(auction.buyer_uuid)
+    return enriched
