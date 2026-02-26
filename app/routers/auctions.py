@@ -13,7 +13,7 @@ from app.schemas.auction import (
     EndedAuctionResponse,
     EndedAuctionListResponse,
 )
-from app.services.compute import get_lab, delta_e, find_top_hex_matches, SETS, ITEM_TO_INFO, HEX_TO_ITEMS, ITEM_TO_SET
+from app.services.compute import get_lab, delta_e, find_top_hex_matches, SETS, ITEM_TO_INFO, HEX_TO_ITEMS, ITEM_TO_SET, HEX_TO_DYE_STAGE
 from app.services.player import get_player_names
 
 router = APIRouter()
@@ -38,24 +38,27 @@ def compute_abs_diff(hex1: str, hex2: str) -> int:
     return abs(r1 - r2) + abs(g1 - g2) + abs(b1 - b2)
 
 
-def get_set_name_for_hex(target_hex: str) -> str | None:
+def get_name_for_hex(target_hex: str) -> str | None:
     item_names = HEX_TO_ITEMS.get(target_hex, [])
     if item_names:
         return ITEM_TO_SET.get(item_names[0], item_names[0])
+    dye_info = HEX_TO_DYE_STAGE.get(target_hex, [])
+    if dye_info:
+        return dye_info[0][0]
     return None
 
 
-def enrich_auction(auction, response_cls):
+def enrich_auction(auction, response_cls, include_dyes: bool = True):
     data = {c: getattr(auction, c) for c in response_cls.model_fields if hasattr(auction, c)}
     hex_color = auction.hex_color.upper()
-    matches = find_top_hex_matches(hex_color, limit=1, include_dyes=False)
+    matches = find_top_hex_matches(hex_color, limit=1, include_dyes=include_dyes)
     if matches:
         target_hex, de = matches[0]
         data["target_hex"] = target_hex
         data["delta_e"] = round(de, 2)
         data["abs_diff"] = compute_abs_diff(hex_color, target_hex)
         data["tier"] = get_tier(de)
-        data["set_name"] = get_set_name_for_hex(target_hex)
+        data["set_name"] = get_name_for_hex(target_hex)
     return response_cls(**data)
 
 
@@ -119,13 +122,14 @@ async def list_active_auctions(
     set_name: str | None = Query(None),
     sort_by: Literal["price", "timeleft"] = Query("timeleft"),
     sort_order: Literal["asc", "desc"] = Query("asc"),
+    include_dyes: bool = Query(True),
 ):
     piece_list = [int(p) for p in pieces.split(",") if p.isdigit()] if pieces else None
     filters = build_filters(ActiveAuction, hex_color, piece_list, min_price, max_price, bin_filter)
     
     result = await db.execute(select(ActiveAuction).where(filters))
     auctions = result.scalars().all()
-    enriched = [enrich_auction(a, ActiveAuctionResponse) for a in auctions]
+    enriched = [enrich_auction(a, ActiveAuctionResponse, include_dyes) for a in auctions]
     filtered = filter_by_tier_and_set(enriched, tier, set_name)
     sorted_auctions = sort_auctions(filtered, sort_by, sort_order)
     
@@ -154,13 +158,14 @@ async def list_ended_auctions(
     set_name: str | None = Query(None),
     sort_by: Literal["price", "timestamp"] = Query("timestamp"),
     sort_order: Literal["asc", "desc"] = Query("desc"),
+    include_dyes: bool = Query(True),
 ):
     piece_list = [int(p) for p in pieces.split(",") if p.isdigit()] if pieces else None
     filters = build_filters(EndedAuction, hex_color, piece_list, min_price, max_price, bin_filter)
     
     result = await db.execute(select(EndedAuction).where(filters))
     auctions = result.scalars().all()
-    enriched = [enrich_auction(a, EndedAuctionResponse) for a in auctions]
+    enriched = [enrich_auction(a, EndedAuctionResponse, include_dyes) for a in auctions]
     filtered = filter_by_tier_and_set(enriched, tier, set_name)
     sorted_auctions = sort_auctions(filtered, sort_by, sort_order, is_ended=True)
     
@@ -180,6 +185,7 @@ async def list_ended_auctions(
 async def list_recent_bids(
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = Query(50, ge=1, le=100),
+    include_dyes: bool = Query(True),
 ):
     from app.models.auction import Bid
     
@@ -196,10 +202,10 @@ async def list_recent_bids(
     
     bids = []
     for bid, auction in rows:
-        matches = find_top_hex_matches(auction.hex_color.upper(), limit=1, include_dyes=False)
+        matches = find_top_hex_matches(auction.hex_color.upper(), limit=1, include_dyes=include_dyes)
         target_hex = matches[0][0] if matches else ""
         de = round(matches[0][1], 2) if matches else 0.0
-        set_name = get_set_name_for_hex(target_hex) if target_hex else None
+        set_name = get_name_for_hex(target_hex) if target_hex else None
         
         abs_diff = compute_abs_diff(auction.hex_color.upper(), target_hex) if target_hex else 0
         
