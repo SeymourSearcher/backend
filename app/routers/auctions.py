@@ -13,7 +13,7 @@ from app.schemas.auction import (
     EndedAuctionResponse,
     EndedAuctionListResponse,
 )
-from app.services.compute import get_lab, delta_e, find_top_hex_matches, SETS, ITEM_TO_INFO
+from app.services.compute import get_lab, delta_e, find_top_hex_matches, SETS, ITEM_TO_INFO, HEX_TO_ITEMS, ITEM_TO_SET
 from app.services.player import get_player_names
 
 router = APIRouter()
@@ -38,6 +38,13 @@ def compute_abs_diff(hex1: str, hex2: str) -> int:
     return abs(r1 - r2) + abs(g1 - g2) + abs(b1 - b2)
 
 
+def get_set_name_for_hex(target_hex: str) -> str | None:
+    item_names = HEX_TO_ITEMS.get(target_hex, [])
+    if item_names:
+        return ITEM_TO_SET.get(item_names[0], item_names[0])
+    return None
+
+
 def enrich_auction(auction, response_cls):
     data = {c: getattr(auction, c) for c in response_cls.model_fields if hasattr(auction, c)}
     hex_color = auction.hex_color.upper()
@@ -48,6 +55,7 @@ def enrich_auction(auction, response_cls):
         data["delta_e"] = round(de, 2)
         data["abs_diff"] = compute_abs_diff(hex_color, target_hex)
         data["tier"] = get_tier(de)
+        data["set_name"] = get_set_name_for_hex(target_hex)
     return response_cls(**data)
 
 
@@ -166,6 +174,50 @@ async def list_ended_auctions(
         auction.buyer_name = names.get(auction.buyer_uuid)
     
     return EndedAuctionListResponse(auctions=paginated, total=total)
+
+
+@router.get("/recent-bids")
+async def list_recent_bids(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: int = Query(50, ge=1, le=100),
+):
+    from app.models.auction import Bid
+    
+    result = await db.execute(
+        select(Bid, ActiveAuction)
+        .join(ActiveAuction, Bid.auction_id == ActiveAuction.auction_id)
+        .order_by(Bid.timestamp.desc())
+        .limit(limit)
+    )
+    rows = result.all()
+    
+    bidder_uuids = list({row[0].bidder_uuid for row in rows})
+    names = await get_player_names(db, bidder_uuids)
+    
+    bids = []
+    for bid, auction in rows:
+        matches = find_top_hex_matches(auction.hex_color.upper(), limit=1, include_dyes=False)
+        target_hex = matches[0][0] if matches else ""
+        de = round(matches[0][1], 2) if matches else 0.0
+        set_name = get_set_name_for_hex(target_hex) if target_hex else None
+        
+        abs_diff = compute_abs_diff(auction.hex_color.upper(), target_hex) if target_hex else 0
+        
+        bids.append({
+            "auction_id": auction.auction_id,
+            "bidder_uuid": bid.bidder_uuid,
+            "bidder_name": names.get(bid.bidder_uuid),
+            "amount": bid.amount,
+            "timestamp": bid.timestamp,
+            "hex_color": auction.hex_color,
+            "piece": auction.piece,
+            "target_hex": target_hex,
+            "set_name": set_name,
+            "delta_e": de,
+            "abs_diff": abs_diff,
+        })
+    
+    return bids
 
 
 @router.get("/sets", response_model=list[str])

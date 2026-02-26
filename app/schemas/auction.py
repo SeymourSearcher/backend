@@ -24,6 +24,7 @@ class ActiveAuctionResponse(BaseModel):
     delta_e: float = 0.0
     abs_diff: int = 0
     target_hex: str = ""
+    set_name: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -53,6 +54,7 @@ class EndedAuctionResponse(BaseModel):
     delta_e: float = 0.0
     abs_diff: int = 0
     target_hex: str = ""
+    set_name: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
