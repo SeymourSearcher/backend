@@ -10,6 +10,7 @@ from app.models.marketplace import (
     HexMatchType,
     Tier,
 )
+from app.models.auction import ActiveAuction, EndedAuction, Bid
 
 __all__ = [
     "User",
@@ -22,5 +23,8 @@ __all__ = [
     "OrderStatus",
     "HexMatchType",
     "Tier",
+    "ActiveAuction",
+    "EndedAuction",
+    "Bid",
 ]
 
