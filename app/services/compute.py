@@ -3,6 +3,7 @@ import json
 import time
 import os
 from collections import Counter
+from scipy.spatial import cKDTree
 
 def _build_lab_table():
     #Makes mapping of RGB -> LAB
@@ -96,38 +97,32 @@ def find_matching_seymours(user_seymours, key_item_hexes, threshold=10.0, best_o
     
     user_by_piece = _group_by_piece(user_seymours)
     target_by_piece = _group_by_piece(target_hexes)
-    
-    threshold_sq = threshold * threshold
     results = []
     
     for piece in range(4):
         user_hexes = user_by_piece.get(piece)
-        target_hexes = target_by_piece.get(piece)
-        if not user_hexes or not target_hexes:
+        target_hexes_piece = target_by_piece.get(piece)
+        if not user_hexes or not target_hexes_piece:
             continue
         
         user_labs = ALL_LAB[_hex_list_to_ints(user_hexes)]
-        #Cache target labs for 2: key_item_hexes + dyes
-        target_labs = ALL_LAB[_hex_list_to_ints(target_hexes)]
-        
-        diff = user_labs[:, np.newaxis, :] - target_labs[np.newaxis, :, :]
-        dist_sq = np.einsum('ijk,ijk->ij', diff, diff)
+        target_labs = ALL_LAB[_hex_list_to_ints(target_hexes_piece)]
+        tree = cKDTree(target_labs)
         
         if best_only:
-            min_idx = np.argmin(dist_sq, axis=1)
-            min_dist_sq = dist_sq[np.arange(len(user_hexes)), min_idx]
-            mask = min_dist_sq < threshold_sq
-            results.extend(
-                ((user_hexes[u], piece), (target_hexes[min_idx[u]], piece), float(np.sqrt(min_dist_sq[u])))
-                for u in np.where(mask)[0]
-            )
+            dists, indices = tree.query(user_labs, k=1)
+            for u, (d, t) in enumerate(zip(dists, indices)):
+                if d < threshold:
+                    results.append(((user_hexes[u], piece), (target_hexes_piece[t], piece), float(d)))
         else:
-            ui, ti = np.where(dist_sq < threshold_sq)
-            distances = np.sqrt(dist_sq[ui, ti])
-            results.extend(
-                ((user_hexes[u], piece), (target_hexes[t], piece), float(d))
-                for u, t, d in zip(ui, ti, distances)
-            )
+            matches = tree.query_ball_point(user_labs, threshold)
+            for u, target_indices in enumerate(matches):
+                if not target_indices:
+                    continue
+                target_indices = np.asarray(target_indices)
+                dists = np.linalg.norm(user_labs[u] - target_labs[target_indices], axis=1)
+                for t, d in zip(target_indices, dists):
+                    results.append(((user_hexes[u], piece), (target_hexes_piece[t], piece), float(d)))
     
     return results
 
@@ -176,12 +171,14 @@ SETS, ITEM_TO_INFO, HEX_TO_ITEMS, KEY_ITEM_HEXES, FADE_DYES, FADE_DYE_HEXES, HEX
 
 UNIQUE_KEY_HEXES = list(dict.fromkeys(h for h, _ in KEY_ITEM_HEXES))
 KEY_ITEM_LABS = ALL_LAB[_hex_list_to_ints(UNIQUE_KEY_HEXES)]
+KEY_ITEM_TREE = cKDTree(KEY_ITEM_LABS)
 
 UNIQUE_DYE_HEXES = list(dict.fromkeys(h for h, _ in FADE_DYE_HEXES))
 DYE_LABS = ALL_LAB[_hex_list_to_ints(UNIQUE_DYE_HEXES)]
 
 UNIQUE_ALL_HEXES = list(dict.fromkeys(UNIQUE_KEY_HEXES + UNIQUE_DYE_HEXES))
 ALL_ITEM_LABS = ALL_LAB[_hex_list_to_ints(UNIQUE_ALL_HEXES)]
+ALL_ITEM_TREE = cKDTree(ALL_ITEM_LABS)
 
 def _build_hex_to_pieces():
     mapping = {}
@@ -193,42 +190,45 @@ def _build_hex_to_pieces():
 
 HEX_TO_PIECES = _build_hex_to_pieces()
 
+def _build_piece_trees(hexes_with_pieces, include_dyes=False):
+    piece_hexes = [[] for _ in range(4)]
+    for hex_code, piece_idx in hexes_with_pieces:
+        piece_hexes[piece_idx].append(hex_code)
+    if include_dyes:
+        for hex_code in UNIQUE_DYE_HEXES:
+            for p in range(4):
+                piece_hexes[p].append(hex_code)
+    piece_hexes = [list(dict.fromkeys(h)) for h in piece_hexes]
+    piece_labs = [ALL_LAB[_hex_list_to_ints(h)] if h else np.empty((0, 3), dtype=np.float32) for h in piece_hexes]
+    piece_trees = [cKDTree(labs) if len(labs) > 0 else None for labs in piece_labs]
+    return piece_hexes, piece_labs, piece_trees
+
+KEY_PIECE_HEXES, KEY_PIECE_LABS, KEY_PIECE_TREES = _build_piece_trees(KEY_ITEM_HEXES, include_dyes=False)
+ALL_PIECE_HEXES, ALL_PIECE_LABS, ALL_PIECE_TREES = _build_piece_trees(KEY_ITEM_HEXES, include_dyes=True)
+
 
 def _hex_to_targets(hex_code: str) -> list[tuple[str, int]]:
     return [(hex_code, p) for p in HEX_TO_PIECES.get(hex_code, {0, 1, 2, 3})]
 
 
-def _get_top_indices(distances: np.ndarray, limit: int) -> np.ndarray:
-    top = np.argpartition(distances, limit)[:limit]
-    return top[np.argsort(distances[top])]
-
-
 def find_top_hex_matches(hex_code: str, limit: int = 3, include_dyes: bool = False) -> list[tuple[str, float]]:
-    hex_list, labs = (UNIQUE_ALL_HEXES, ALL_ITEM_LABS) if include_dyes else (UNIQUE_KEY_HEXES, KEY_ITEM_LABS)
-    distances = delta_e(get_lab(hex_code), labs)
-    return [(hex_list[i], float(distances[i])) for i in _get_top_indices(distances, limit)]
+    hex_list, tree = (UNIQUE_ALL_HEXES, ALL_ITEM_TREE) if include_dyes else (UNIQUE_KEY_HEXES, KEY_ITEM_TREE)
+    dists, indices = tree.query(get_lab(hex_code), k=limit)
+    if limit == 1:
+        return [(hex_list[indices], float(dists))]
+    return [(hex_list[i], float(d)) for i, d in zip(indices, dists)]
 
 
 def find_top_hex_matches_batch(hex_codes: list[str], include_dyes: bool = False) -> dict[str, tuple[str, float]]:
     if not hex_codes:
         return {}
     
-    hex_list, target_labs = (UNIQUE_ALL_HEXES, ALL_ITEM_LABS) if include_dyes else (UNIQUE_KEY_HEXES, KEY_ITEM_LABS)
-    
+    hex_list, tree = (UNIQUE_ALL_HEXES, ALL_ITEM_TREE) if include_dyes else (UNIQUE_KEY_HEXES, KEY_ITEM_TREE)
     unique_hexes = list(dict.fromkeys(h.upper() for h in hex_codes))
-    input_ints = _hex_list_to_ints(unique_hexes)
-    input_labs = ALL_LAB[input_ints]
+    input_labs = ALL_LAB[_hex_list_to_ints(unique_hexes)]
     
-    diff = input_labs[:, np.newaxis, :] - target_labs[np.newaxis, :, :]
-    dist_sq = np.einsum('ijk,ijk->ij', diff, diff)
-    
-    min_indices = np.argmin(dist_sq, axis=1)
-    min_distances = np.sqrt(dist_sq[np.arange(len(unique_hexes)), min_indices])
-    
-    return {
-        h: (hex_list[min_indices[i]], float(min_distances[i]))
-        for i, h in enumerate(unique_hexes)
-    }
+    dists, indices = tree.query(input_labs, k=1)
+    return {h: (hex_list[indices[i]], float(dists[i])) for i, h in enumerate(unique_hexes)}
 
 
 def find_users_near_hex(seymour_list: list[tuple[str, int]], target_hex: str, threshold: float = 10.0) -> list[tuple[str, int, float]]:
@@ -457,8 +457,6 @@ def _greedy_select(candidates, threshold):
 
 
 def find_custom_sets(seymour_list, max_avg_delta_e=1.0):
-    from scipy.spatial import cKDTree
-    
     pieces, piece_labs = _get_piece_labs(seymour_list)
     if pieces is None:
         return []
