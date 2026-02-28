@@ -183,3 +183,14 @@ async def set_cached_custom_sets(redis: Redis, seymour_list: list, custom_sets: 
     key = _custom_sets_key(_hash_seymour_list(seymour_list))
     await set_cached(redis, key, custom_sets, CUSTOM_SETS_TTL)
 
+
+RATE_LIMIT_PREFIX = "ratelimit:"
+
+
+async def check_rate_limit(redis: Redis, key: str, max_requests: int, window_seconds: int) -> tuple[bool, int]:
+    full_key = f"{RATE_LIMIT_PREFIX}{key}"
+    current = await redis.incr(full_key)
+    if current == 1:
+        await redis.expire(full_key, window_seconds)
+    ttl = await redis.ttl(full_key)
+    return current <= max_requests, max(0, ttl)

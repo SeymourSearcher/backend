@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 
 from app.config import get_settings
-from app.routers import auth, users, seymours, stats, hex, marketplace
+from app.routers import auth, users, seymours, stats, hex, marketplace, visualization
 from app.routers import auctions as auctions_router
 from app.services.auction_sync import start_sync_loop
 
@@ -41,6 +41,7 @@ app.include_router(stats.router, prefix="/stats", tags=["stats"])
 app.include_router(hex.router, prefix="/hex", tags=["hex"])
 app.include_router(marketplace.router, prefix="/marketplace", tags=["marketplace"])
 app.include_router(auctions_router.router, prefix="/auctions", tags=["auctions"])
+app.include_router(visualization.router, prefix="/visualization", tags=["visualization"])
 
 
 ROBOTS_TXT = """User-agent: *

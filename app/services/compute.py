@@ -84,6 +84,55 @@ def _group_by_piece(seymours):
 def _hex_list_to_ints(hex_list):
     return np.array([int(h, 16) for h in hex_list], dtype=np.uint32)
 
+def _get_piece_tree_and_hexes(key_item_hexes, include_dyes):
+    """Returns (trees, piece_hexes) using pre-built if possible, else builds new."""
+    if key_item_hexes is KEY_ITEM_HEXES:
+        if include_dyes:
+            return ALL_PIECE_TREES, ALL_PIECE_HEXES
+        return KEY_PIECE_TREES, KEY_PIECE_HEXES
+    
+    if key_item_hexes is FADE_DYE_HEXES and not include_dyes:
+        trees = [cKDTree(ALL_LAB[_hex_list_to_ints(UNIQUE_DYE_HEXES)]) if UNIQUE_DYE_HEXES else None] * 4
+        piece_hexes = [UNIQUE_DYE_HEXES] * 4
+        return trees, piece_hexes
+    
+    target_hexes = list(key_item_hexes)
+    if include_dyes:
+        target_hexes.extend(FADE_DYE_HEXES)
+    target_by_piece = _group_by_piece(target_hexes)
+    
+    piece_hexes = [target_by_piece.get(p, []) for p in range(4)]
+    trees = []
+    for hexes in piece_hexes:
+        if hexes:
+            trees.append(cKDTree(ALL_LAB[_hex_list_to_ints(hexes)]))
+        else:
+            trees.append(None)
+    return trees, piece_hexes
+
+
+def _query_best_only(tree, user_labs, user_hexes, target_hexes, piece, threshold):
+    dists, indices = tree.query(user_labs, k=1)
+    results = []
+    for u in range(len(user_hexes)):
+        if dists[u] < threshold:
+            results.append(((user_hexes[u], piece), (target_hexes[indices[u]], piece), float(dists[u])))
+    return results
+
+
+def _query_all_matches(tree, user_labs, user_hexes, target_labs, target_hexes, piece, threshold):
+    matches = tree.query_ball_point(user_labs, threshold)
+    results = []
+    for u, target_indices in enumerate(matches):
+        if not target_indices:
+            continue
+        target_indices = np.asarray(target_indices)
+        dists = np.linalg.norm(user_labs[u] - target_labs[target_indices], axis=1)
+        for t, d in zip(target_indices, dists):
+            results.append(((user_hexes[u], piece), (target_hexes[t], piece), float(d)))
+    return results
+
+
 def find_matching_seymours(user_seymours, key_item_hexes, threshold=10.0, best_only=False, include_dyes=False):
     """
     Finds user seymours within delta E threshold of target seymours (same piece type).
@@ -91,38 +140,24 @@ def find_matching_seymours(user_seymours, key_item_hexes, threshold=10.0, best_o
     If best_only=True, returns only the closest match per user seymour.
     If include_dyes=True, also matches against fade dye hexes.
     """
-    target_hexes = list(key_item_hexes)
-    if include_dyes:
-        target_hexes.extend(FADE_DYE_HEXES)
-    
+    trees, piece_hexes = _get_piece_tree_and_hexes(key_item_hexes, include_dyes)
     user_by_piece = _group_by_piece(user_seymours)
-    target_by_piece = _group_by_piece(target_hexes)
     results = []
     
     for piece in range(4):
         user_hexes = user_by_piece.get(piece)
-        target_hexes_piece = target_by_piece.get(piece)
-        if not user_hexes or not target_hexes_piece:
+        target_hexes = piece_hexes[piece]
+        tree = trees[piece]
+        if not user_hexes or not target_hexes or tree is None:
             continue
         
         user_labs = ALL_LAB[_hex_list_to_ints(user_hexes)]
-        target_labs = ALL_LAB[_hex_list_to_ints(target_hexes_piece)]
-        tree = cKDTree(target_labs)
         
         if best_only:
-            dists, indices = tree.query(user_labs, k=1)
-            for u, (d, t) in enumerate(zip(dists, indices)):
-                if d < threshold:
-                    results.append(((user_hexes[u], piece), (target_hexes_piece[t], piece), float(d)))
+            results.extend(_query_best_only(tree, user_labs, user_hexes, target_hexes, piece, threshold))
         else:
-            matches = tree.query_ball_point(user_labs, threshold)
-            for u, target_indices in enumerate(matches):
-                if not target_indices:
-                    continue
-                target_indices = np.asarray(target_indices)
-                dists = np.linalg.norm(user_labs[u] - target_labs[target_indices], axis=1)
-                for t, d in zip(target_indices, dists):
-                    results.append(((user_hexes[u], piece), (target_hexes_piece[t], piece), float(d)))
+            target_labs = ALL_LAB[_hex_list_to_ints(target_hexes)]
+            results.extend(_query_all_matches(tree, user_labs, user_hexes, target_labs, target_hexes, piece, threshold))
     
     return results
 

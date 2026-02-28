@@ -312,6 +312,19 @@ def _sort_results(results: list[dict], sort: str, filter_type: str) -> list[dict
     return sorted(results, key=lambda r: r.get("match", {}).get("delta_e") if r.get("match") else float("inf"), reverse=reverse)
 
 
+@router.get("/hex-codes")
+async def get_user_hex_codes(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+    with_pieces: bool = Query(False)
+):
+    seymours = await get_user_seymours(db, redis, user.id)
+    if with_pieces:
+        return list({(s.hex_color.upper(), s.item_name) for s in seymours})
+    return list({s.hex_color.upper() for s in seymours})
+
+
 @router.get("/", response_model=list[SeymourWithMatchResponse])
 async def list_seymours(
     user: Annotated[User, Depends(get_current_user)],
