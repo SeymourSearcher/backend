@@ -1,7 +1,7 @@
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, asc, desc
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_db
@@ -13,7 +13,7 @@ from app.schemas.auction import (
     EndedAuctionResponse,
     EndedAuctionListResponse,
 )
-from app.services.compute import get_lab, delta_e, find_top_hex_matches, SETS, ITEM_TO_INFO, HEX_TO_ITEMS, ITEM_TO_SET, HEX_TO_DYE_STAGE
+from app.services.compute import get_lab, delta_e, find_top_hex_matches, find_top_hex_matches_batch, SETS, ITEM_TO_INFO, HEX_TO_ITEMS, ITEM_TO_SET, HEX_TO_DYE_STAGE
 from app.services.player import get_player_names
 
 router = APIRouter()
@@ -48,18 +48,24 @@ def get_name_for_hex(target_hex: str) -> str | None:
     return None
 
 
-def enrich_auction(auction, response_cls, include_dyes: bool = True):
+def enrich_auction(auction, response_cls, match_data: dict | None = None):
     data = {c: getattr(auction, c) for c in response_cls.model_fields if hasattr(auction, c)}
     hex_color = auction.hex_color.upper()
-    matches = find_top_hex_matches(hex_color, limit=1, include_dyes=include_dyes)
-    if matches:
-        target_hex, de = matches[0]
+    
+    if match_data and hex_color in match_data:
+        target_hex, de = match_data[hex_color]
         data["target_hex"] = target_hex
         data["delta_e"] = round(de, 2)
         data["abs_diff"] = compute_abs_diff(hex_color, target_hex)
         data["tier"] = get_tier(de)
         data["set_name"] = get_name_for_hex(target_hex)
     return response_cls(**data)
+
+
+def enrich_auctions_batch(auctions, response_cls, include_dyes: bool = True):
+    hex_codes = [a.hex_color.upper() for a in auctions]
+    match_data = find_top_hex_matches_batch(hex_codes, include_dyes=include_dyes)
+    return [enrich_auction(a, response_cls, match_data) for a in auctions]
 
 
 def build_filters(model, hex_color: str | None, pieces: list[int] | None, min_price: int | None, max_price: int | None, bin_filter: str | None):
@@ -127,14 +133,27 @@ async def list_active_auctions(
     piece_list = [int(p) for p in pieces.split(",") if p.isdigit()] if pieces else None
     filters = build_filters(ActiveAuction, hex_color, piece_list, min_price, max_price, bin_filter)
     
-    result = await db.execute(select(ActiveAuction).where(filters))
-    auctions = result.scalars().all()
-    enriched = [enrich_auction(a, ActiveAuctionResponse, include_dyes) for a in auctions]
-    filtered = filter_by_tier_and_set(enriched, tier, set_name)
-    sorted_auctions = sort_auctions(filtered, sort_by, sort_order)
+    needs_post_filter = tier is not None or set_name is not None
     
-    total = len(sorted_auctions)
-    paginated = sorted_auctions[skip:skip + limit]
+    if needs_post_filter:
+        result = await db.execute(select(ActiveAuction).where(filters))
+        auctions = list(result.scalars().all())
+        enriched = enrich_auctions_batch(auctions, ActiveAuctionResponse, include_dyes)
+        filtered = filter_by_tier_and_set(enriched, tier, set_name)
+        sorted_auctions = sort_auctions(filtered, sort_by, sort_order)
+        total = len(sorted_auctions)
+        paginated = sorted_auctions[skip:skip + limit]
+    else:
+        sort_col = ActiveAuction.price if sort_by == "price" else ActiveAuction.end_time
+        order_func = desc if sort_order == "desc" else asc
+        
+        count_result = await db.execute(select(func.count()).select_from(ActiveAuction).where(filters))
+        total = count_result.scalar() or 0
+        
+        query = select(ActiveAuction).where(filters).order_by(order_func(sort_col)).offset(skip).limit(limit)
+        result = await db.execute(query)
+        auctions = list(result.scalars().all())
+        paginated = enrich_auctions_batch(auctions, ActiveAuctionResponse, include_dyes)
     
     seller_uuids = list({a.seller_uuid for a in paginated})
     names = await get_player_names(db, seller_uuids)
@@ -163,14 +182,27 @@ async def list_ended_auctions(
     piece_list = [int(p) for p in pieces.split(",") if p.isdigit()] if pieces else None
     filters = build_filters(EndedAuction, hex_color, piece_list, min_price, max_price, bin_filter)
     
-    result = await db.execute(select(EndedAuction).where(filters))
-    auctions = result.scalars().all()
-    enriched = [enrich_auction(a, EndedAuctionResponse, include_dyes) for a in auctions]
-    filtered = filter_by_tier_and_set(enriched, tier, set_name)
-    sorted_auctions = sort_auctions(filtered, sort_by, sort_order, is_ended=True)
+    needs_post_filter = tier is not None or set_name is not None
     
-    total = len(sorted_auctions)
-    paginated = sorted_auctions[skip:skip + limit]
+    if needs_post_filter:
+        result = await db.execute(select(EndedAuction).where(filters))
+        auctions = list(result.scalars().all())
+        enriched = enrich_auctions_batch(auctions, EndedAuctionResponse, include_dyes)
+        filtered = filter_by_tier_and_set(enriched, tier, set_name)
+        sorted_auctions = sort_auctions(filtered, sort_by, sort_order, is_ended=True)
+        total = len(sorted_auctions)
+        paginated = sorted_auctions[skip:skip + limit]
+    else:
+        sort_col = EndedAuction.price if sort_by == "price" else EndedAuction.timestamp
+        order_func = desc if sort_order == "desc" else asc
+        
+        count_result = await db.execute(select(func.count()).select_from(EndedAuction).where(filters))
+        total = count_result.scalar() or 0
+        
+        query = select(EndedAuction).where(filters).order_by(order_func(sort_col)).offset(skip).limit(limit)
+        result = await db.execute(query)
+        auctions = list(result.scalars().all())
+        paginated = enrich_auctions_batch(auctions, EndedAuctionResponse, include_dyes)
     
     all_uuids = list({a.seller_uuid for a in paginated} | {a.buyer_uuid for a in paginated})
     names = await get_player_names(db, all_uuids)
@@ -200,14 +232,13 @@ async def list_recent_bids(
     bidder_uuids = list({row[0].bidder_uuid for row in rows})
     names = await get_player_names(db, bidder_uuids)
     
+    hex_codes = [auction.hex_color.upper() for _, auction in rows]
+    match_data = find_top_hex_matches_batch(hex_codes, include_dyes=include_dyes)
+    
     bids = []
     for bid, auction in rows:
-        matches = find_top_hex_matches(auction.hex_color.upper(), limit=1, include_dyes=include_dyes)
-        target_hex = matches[0][0] if matches else ""
-        de = round(matches[0][1], 2) if matches else 0.0
-        set_name = get_name_for_hex(target_hex) if target_hex else None
-        
-        abs_diff = compute_abs_diff(auction.hex_color.upper(), target_hex) if target_hex else 0
+        hex_color = auction.hex_color.upper()
+        target_hex, de = match_data.get(hex_color, ("", 0.0))
         
         bids.append({
             "auction_id": auction.auction_id,
@@ -218,9 +249,9 @@ async def list_recent_bids(
             "hex_color": auction.hex_color,
             "piece": auction.piece,
             "target_hex": target_hex,
-            "set_name": set_name,
-            "delta_e": de,
-            "abs_diff": abs_diff,
+            "set_name": get_name_for_hex(target_hex) if target_hex else None,
+            "delta_e": round(de, 2),
+            "abs_diff": compute_abs_diff(hex_color, target_hex) if target_hex else 0,
         })
     
     return bids
@@ -246,7 +277,7 @@ async def get_active_auction(
     if not auction:
         raise HTTPException(status_code=404, detail="Auction not found")
     
-    enriched = enrich_auction(auction, ActiveAuctionDetailResponse)
+    enriched = enrich_auctions_batch([auction], ActiveAuctionDetailResponse)[0]
     names = await get_player_names(db, [auction.seller_uuid])
     enriched.seller_name = names.get(auction.seller_uuid)
     return enriched
@@ -265,7 +296,7 @@ async def get_ended_auction(
     if not auction:
         raise HTTPException(status_code=404, detail="Auction not found")
     
-    enriched = enrich_auction(auction, EndedAuctionResponse)
+    enriched = enrich_auctions_batch([auction], EndedAuctionResponse)[0]
     names = await get_player_names(db, [auction.seller_uuid, auction.buyer_uuid])
     enriched.seller_name = names.get(auction.seller_uuid)
     enriched.buyer_name = names.get(auction.buyer_uuid)

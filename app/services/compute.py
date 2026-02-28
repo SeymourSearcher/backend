@@ -209,6 +209,28 @@ def find_top_hex_matches(hex_code: str, limit: int = 3, include_dyes: bool = Fal
     return [(hex_list[i], float(distances[i])) for i in _get_top_indices(distances, limit)]
 
 
+def find_top_hex_matches_batch(hex_codes: list[str], include_dyes: bool = False) -> dict[str, tuple[str, float]]:
+    if not hex_codes:
+        return {}
+    
+    hex_list, target_labs = (UNIQUE_ALL_HEXES, ALL_ITEM_LABS) if include_dyes else (UNIQUE_KEY_HEXES, KEY_ITEM_LABS)
+    
+    unique_hexes = list(dict.fromkeys(h.upper() for h in hex_codes))
+    input_ints = _hex_list_to_ints(unique_hexes)
+    input_labs = ALL_LAB[input_ints]
+    
+    diff = input_labs[:, np.newaxis, :] - target_labs[np.newaxis, :, :]
+    dist_sq = np.einsum('ijk,ijk->ij', diff, diff)
+    
+    min_indices = np.argmin(dist_sq, axis=1)
+    min_distances = np.sqrt(dist_sq[np.arange(len(unique_hexes)), min_indices])
+    
+    return {
+        h: (hex_list[min_indices[i]], float(min_distances[i]))
+        for i, h in enumerate(unique_hexes)
+    }
+
+
 def find_users_near_hex(seymour_list: list[tuple[str, int]], target_hex: str, threshold: float = 10.0) -> list[tuple[str, int, float]]:
     matches = find_matching_seymours(seymour_list, _hex_to_targets(target_hex), threshold=threshold)
     return [(user_hex, piece, de) for (user_hex, piece), _, de in matches]
