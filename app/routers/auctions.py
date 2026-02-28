@@ -264,24 +264,36 @@ async def list_available_sets():
     return sorted(SETS.keys())
 
 
+def trim_outliers(prices: list[int], lower_pct: float = 0.05, upper_pct: float = 0.95) -> list[int]:
+    if len(prices) < 10:
+        return prices
+    lower_idx = int(len(prices) * lower_pct)
+    upper_idx = int(len(prices) * upper_pct)
+    return prices[lower_idx:upper_idx]
+
+
 def compute_price_buckets(prices: list[int], bucket_count: int = 8) -> list[PriceBucket]:
     if not prices:
         return []
     
     prices = sorted(prices)
-    min_price = prices[0]
-    max_price = prices[-1]
+    trimmed = trim_outliers(prices)
+    if not trimmed:
+        return []
+    
+    min_price = trimmed[0]
+    max_price = trimmed[-1]
     price_range = max_price - min_price
     
     if price_range == 0:
         return [PriceBucket(
             label=f"{min_price:,}",
-            count=len(prices),
+            count=len(trimmed),
             min_price=min_price,
             max_price=max_price
         )]
     
-    bucket_count = min(bucket_count, max(4, len(prices) // 10))
+    bucket_count = min(bucket_count, max(4, len(trimmed) // 10))
     bucket_size = price_range / bucket_count
     
     buckets = []
@@ -295,7 +307,7 @@ def compute_price_buckets(prices: list[int], bucket_count: int = 8) -> list[Pric
             max_price=bucket_max
         ))
     
-    for price in prices:
+    for price in trimmed:
         idx = min(bucket_count - 1, int((price - min_price) / bucket_size))
         buckets[idx].count += 1
     
