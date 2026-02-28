@@ -85,10 +85,10 @@ def generate_3d_html(indices: np.ndarray, total: int, max_points: int = 100000) 
     if n_points == 0:
         return "<html><body><h2>No matching colors found</h2></body></html>"
     
-    sampled = indices
     if n_points > max_points:
-        step = n_points // max_points
-        sampled = indices[::step]
+        sampled = indices[np.random.choice(n_points, max_points, replace=False)]
+    else:
+        sampled = indices
     
     r = (sampled >> 16) & 0xFF
     g = (sampled >> 8) & 0xFF
@@ -101,7 +101,7 @@ def generate_3d_html(indices: np.ndarray, total: int, max_points: int = 100000) 
         x=r, y=g, z=b,
         mode='markers',
         marker=dict(size=1.5, color=color_strs, opacity=0.7),
-        hovertemplate='R:%{x} G:%{y} B:%{z}<extra></extra>'
+        hoverinfo='skip',
     )])
     
     fig.update_layout(
@@ -117,4 +117,8 @@ def generate_3d_html(indices: np.ndarray, total: int, max_points: int = 100000) 
         margin=dict(l=0, r=0, t=40, b=0)
     )
     
-    return fig.to_html(full_html=True, include_plotlyjs=True)
+    config = {
+        'scrollZoom': True,
+    }
+    
+    return fig.to_html(full_html=True, include_plotlyjs='cdn', config=config)
