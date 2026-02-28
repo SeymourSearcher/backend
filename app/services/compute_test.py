@@ -4,7 +4,7 @@ from compute import ALL_LAB, KEY_ITEM_LABS, DYE_LABS
 
 def generate_color_map(threshold: float = 5.0) -> np.ndarray:
     """Returns boolean mask where True = delta E < threshold to any key item."""
-    tree = cKDTree(np.vstack([KEY_ITEM_LABS, DYE_LABS]))
+    tree = cKDTree(np.vstack([KEY_ITEM_LABS]))
     distances, _ = tree.query(ALL_LAB, k=1, workers=-1)
     return distances < threshold
 
@@ -106,7 +106,7 @@ if __name__ == "__main__":
     print("Computing color map (dE < 5)...")
     start = time.time()
     
-    mask = generate_color_map(5.0)
+    mask = generate_color_map(2.0)
     
     print(f"Completed in {time.time() - start:.2f}s")
     print(f"Matching colors: {mask.sum():,} / 16,777,216")

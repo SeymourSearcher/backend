@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.dialects.mysql import insert
 
 from app.models import Player
 
@@ -63,16 +64,21 @@ async def get_player_names(db: AsyncSession, uuids: list[str]) -> dict[str, str]
         import asyncio
         fetched = await asyncio.gather(*[fetch_username_from_api(clean) for clean, _, _ in to_fetch])
         
+        new_players = []
         for (clean, original, player), username in zip(to_fetch, fetched):
             if username:
-                if player:
-                    player.username = username
-                    player.last_updated = now
-                else:
-                    db.add(Player(uuid=clean, username=username))
+                new_players.append({"uuid": clean, "username": username, "last_updated": now})
                 names[original] = username
             elif player:
                 names[original] = player.username
+        
+        if new_players:
+            stmt = insert(Player).values(new_players)
+            stmt = stmt.on_duplicate_key_update(
+                username=stmt.inserted.username,
+                last_updated=stmt.inserted.last_updated
+            )
+            await db.execute(stmt)
         
         await db.commit()
 

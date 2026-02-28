@@ -10,3 +10,7 @@ build/
 .pytest_cache/
 .mypy_cache/
 
+# color maps
+color_map.png
+color_cube.png
+color_cube_3d.html
