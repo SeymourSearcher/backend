@@ -62,3 +62,24 @@ class EndedAuctionResponse(BaseModel):
 class EndedAuctionListResponse(BaseModel):
     auctions: list[EndedAuctionResponse]
     total: int
+
+
+class PriceBucket(BaseModel):
+    label: str
+    count: int
+    min_price: int
+    max_price: int
+
+
+class AuctionStatsResponse(BaseModel):
+    total: int
+    avg_price: float
+    median_price: float
+    total_volume: int
+    bin_count: int
+    auction_count: int
+    t1_count: int
+    t2_count: int
+    t3_count: int
+    price_distribution: list[PriceBucket]
+    hourly_activity: list[int]

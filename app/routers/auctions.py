@@ -12,6 +12,8 @@ from app.schemas.auction import (
     ActiveAuctionListResponse,
     EndedAuctionResponse,
     EndedAuctionListResponse,
+    AuctionStatsResponse,
+    PriceBucket,
 )
 from app.services.compute import get_lab, delta_e, find_top_hex_matches, find_top_hex_matches_batch, SETS, ITEM_TO_INFO, HEX_TO_ITEMS, ITEM_TO_SET, HEX_TO_DYE_STAGE
 from app.services.player import get_player_names
@@ -260,6 +262,132 @@ async def list_recent_bids(
 @router.get("/sets", response_model=list[str])
 async def list_available_sets():
     return sorted(SETS.keys())
+
+
+def compute_price_buckets(prices: list[int], bucket_count: int = 8) -> list[PriceBucket]:
+    if not prices:
+        return []
+    
+    prices = sorted(prices)
+    min_price = prices[0]
+    max_price = prices[-1]
+    price_range = max_price - min_price
+    
+    if price_range == 0:
+        return [PriceBucket(
+            label=f"{min_price:,}",
+            count=len(prices),
+            min_price=min_price,
+            max_price=max_price
+        )]
+    
+    bucket_count = min(bucket_count, max(4, len(prices) // 10))
+    bucket_size = price_range / bucket_count
+    
+    buckets = []
+    for i in range(bucket_count):
+        bucket_min = int(min_price + i * bucket_size)
+        bucket_max = int(min_price + (i + 1) * bucket_size) if i < bucket_count - 1 else max_price + 1
+        buckets.append(PriceBucket(
+            label=f"{format_price(bucket_min)} - {format_price(bucket_max)}",
+            count=0,
+            min_price=bucket_min,
+            max_price=bucket_max
+        ))
+    
+    for price in prices:
+        idx = min(bucket_count - 1, int((price - min_price) / bucket_size))
+        buckets[idx].count += 1
+    
+    return buckets
+
+
+def format_price(price: int) -> str:
+    if price >= 1_000_000:
+        return f"{price / 1_000_000:.1f}M"
+    if price >= 1_000:
+        return f"{price // 1_000}K"
+    return str(price)
+
+
+def compute_hourly_activity(timestamps: list[int]) -> list[int]:
+    from datetime import datetime, timezone
+    hours = [0] * 24
+    for ts in timestamps:
+        # Timestamps from Hypixel API are in milliseconds, convert to seconds
+        ts_seconds = ts // 1000 if ts > 9999999999 else ts
+        dt = datetime.fromtimestamp(ts_seconds, tz=timezone.utc)
+        hours[dt.hour] += 1
+    return hours
+
+
+def compute_stats(auctions: list) -> dict:
+    if not auctions:
+        return {
+            "total": 0,
+            "avg_price": 0.0,
+            "median_price": 0.0,
+            "total_volume": 0,
+            "bin_count": 0,
+            "auction_count": 0,
+            "t1_count": 0,
+            "t2_count": 0,
+            "t3_count": 0,
+            "price_distribution": [],
+            "hourly_activity": [0] * 24,
+        }
+    
+    prices = sorted([a.price for a in auctions])
+    timestamps = [a.timestamp for a in auctions]
+    
+    avg_price = sum(prices) / len(prices)
+    median_price = (
+        (prices[len(prices) // 2 - 1] + prices[len(prices) // 2]) / 2
+        if len(prices) % 2 == 0
+        else prices[len(prices) // 2]
+    )
+    
+    bin_count = sum(1 for a in auctions if a.is_bin)
+    t1_count = sum(1 for a in auctions if a.tier == "t1")
+    t2_count = sum(1 for a in auctions if a.tier == "t2")
+    t3_count = sum(1 for a in auctions if a.tier == "t3")
+    
+    return {
+        "total": len(auctions),
+        "avg_price": round(avg_price, 2),
+        "median_price": round(median_price, 2),
+        "total_volume": sum(prices),
+        "bin_count": bin_count,
+        "auction_count": len(auctions) - bin_count,
+        "t1_count": t1_count,
+        "t2_count": t2_count,
+        "t3_count": t3_count,
+        "price_distribution": compute_price_buckets(prices),
+        "hourly_activity": compute_hourly_activity(timestamps),
+    }
+
+
+@router.get("/stats", response_model=AuctionStatsResponse)
+async def get_auction_stats(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    hex_color: str | None = Query(None),
+    pieces: str | None = Query(None),
+    min_price: int | None = Query(None, ge=0),
+    max_price: int | None = Query(None, ge=0),
+    bin_filter: Literal["all", "bin", "nobin"] | None = Query(None),
+    tier: Literal["t1", "t2", "t3"] | None = Query(None),
+    set_name: str | None = Query(None),
+    include_dyes: bool = Query(True),
+):
+    piece_list = [int(p) for p in pieces.split(",") if p.isdigit()] if pieces else None
+    filters = build_filters(EndedAuction, hex_color, piece_list, min_price, max_price, bin_filter)
+    
+    result = await db.execute(select(EndedAuction).where(filters))
+    auctions = list(result.scalars().all())
+    enriched = enrich_auctions_batch(auctions, EndedAuctionResponse, include_dyes)
+    filtered = filter_by_tier_and_set(enriched, tier, set_name)
+    
+    return AuctionStatsResponse(**compute_stats(filtered))
 
 
 @router.get("/active/{auction_id}", response_model=ActiveAuctionDetailResponse)
