@@ -235,6 +235,21 @@ def _load_precomputed_matches():
 HEX_MATCH_KEYS_IDX, HEX_MATCH_KEYS_DE, HEX_MATCH_ALL_IDX, HEX_MATCH_ALL_DE = _load_precomputed_matches()
 USE_PRECOMPUTED = HEX_MATCH_KEYS_IDX is not None
 
+def _load_hex_neighborhoods():
+    keys_path = os.path.join(STATIC_DIR, 'hex_neighborhoods_keys.npy')
+    all_path = os.path.join(STATIC_DIR, 'hex_neighborhoods_all.npy')
+    
+    keys_data = np.load(keys_path, allow_pickle=True).item() if os.path.exists(keys_path) else {}
+    all_data = np.load(all_path, allow_pickle=True).item() if os.path.exists(all_path) else {}
+    return keys_data, all_data
+
+HEX_NEIGHBORHOODS_KEYS, HEX_NEIGHBORHOODS_ALL = _load_hex_neighborhoods()
+
+def get_hex_neighborhood(target_hex: str, include_dyes: bool = False) -> list[str]:
+    data = HEX_NEIGHBORHOODS_ALL if include_dyes else HEX_NEIGHBORHOODS_KEYS
+    neighbors = data.get(target_hex, np.array([], dtype=np.uint32))
+    return [f"{i:06X}" for i in neighbors]
+
 def _build_hex_to_pieces():
     mapping = {}
     for hex_code, piece_idx in KEY_ITEM_HEXES:

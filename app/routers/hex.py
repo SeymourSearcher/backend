@@ -9,7 +9,7 @@ from redis.asyncio import Redis
 
 from app.dependencies import get_db, get_redis
 from app.services.compute import (
-    find_top_hex_matches, find_users_near_hex,
+    find_top_hex_matches, get_hex_neighborhood, get_lab, delta_e,
     HEX_TO_ITEMS, ITEM_TO_INFO, ITEM_TO_SET, HEX_TO_DYE_STAGE, FADE_DYES
 )
 from app.models import User, Seymour
@@ -66,6 +66,39 @@ def build_match_info(target_hex: str, de: float, include_dyes: bool = False) -> 
     return None
 
 
+async def fetch_all_user_seymours(db: AsyncSession) -> list[tuple[User, Seymour]]:
+    result = await db.execute(select(User, Seymour).join(Seymour))
+    return list(result.all())
+
+
+def compute_user_tiers_for_target(user_seymours: list[tuple[User, Seymour]], target_hex: str, neighborhood: set[int]) -> dict:
+    target_lab = get_lab(target_hex)
+    user_best = {}
+    
+    for user, seymour in user_seymours:
+        hex_int = int(seymour.hex_color, 16)
+        if hex_int not in neighborhood:
+            continue
+        de_val = float(delta_e(get_lab(seymour.hex_color), target_lab))
+        if user.id not in user_best or de_val < user_best[user.id][1]:
+            user_best[user.id] = (user, de_val)
+    
+    users_by_tier = {"t1": [], "t2": [], "t3": []}
+    for user, best_de in user_best.values():
+        tier = get_tier(best_de)
+        if tier:
+            users_by_tier[tier].append({
+                "username": user.username,
+                "discord_id": str(user.discord_id),
+                "avatar_hash": user.avatar_hash,
+                "delta_e": round(best_de, 2)
+            })
+    
+    for tier in users_by_tier:
+        users_by_tier[tier].sort(key=lambda x: x["delta_e"])
+    return users_by_tier
+
+
 @router.get("/{hex_code}")
 async def get_hex_info(
     hex_code: str,
@@ -75,42 +108,18 @@ async def get_hex_info(
 ):
     hex_code = validate_hex(hex_code)
     
-    async def fetch_users():
-        result = await db.execute(
-            select(User).options(selectinload(User.seymours)).where(User.seymours.any())
-        )
-        return result.scalars().all()
-    
-    raw_matches, users = await asyncio.gather(
-        asyncio.to_thread(find_top_hex_matches, hex_code, 3, include_dyes),
-        fetch_users()
-    )
+    raw_matches = await asyncio.to_thread(find_top_hex_matches, hex_code, 3, include_dyes)
     top_matches = [m for t, d in raw_matches if (m := build_match_info(t, d, include_dyes))]
     
-    user_seymours = {
-        user.id: (user, [(s.hex_color, s.item_name) for s in user.seymours])
-        for user in users
-    }
+    from app.services.compute import HEX_NEIGHBORHOODS_KEYS, HEX_NEIGHBORHOODS_ALL
+    neighborhoods_data = HEX_NEIGHBORHOODS_ALL if include_dyes else HEX_NEIGHBORHOODS_KEYS
+    neighborhoods = {m["target_hex"]: set(neighborhoods_data.get(m["target_hex"], [])) for m in top_matches}
+    
+    user_seymours = await fetch_all_user_seymours(db)
+    
     for match in top_matches:
         target_hex = match["target_hex"]
-        users_by_tier = {"t1": [], "t2": [], "t3": []}
-        
-        for user_id, (user, seymour_list) in user_seymours.items():
-            nearby = find_users_near_hex(seymour_list, target_hex, threshold=10.0)
-            if not nearby:
-                continue
-            best_de = min(de for _, _, de in nearby)
-            tier = get_tier(best_de)
-            if tier:
-                users_by_tier[tier].append({
-                    "username": user.username,
-                    "discord_id": str(user.discord_id),
-                    "avatar_hash": user.avatar_hash,
-                    "delta_e": round(best_de, 2)
-                })
-        for tier in users_by_tier:
-            users_by_tier[tier].sort(key=lambda x: x["delta_e"])
-        match["users_by_tier"] = users_by_tier
+        match["users_by_tier"] = compute_user_tiers_for_target(user_seymours, target_hex, neighborhoods[target_hex])
     
     return {
         "hex_code": hex_code,

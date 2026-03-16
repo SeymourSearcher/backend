@@ -16,6 +16,7 @@ class Seymour(Base):
     __tablename__ = "seymours"
     __table_args__ = (
         Index("ix_seymours_user_item", "user_id", "item_name"),
+        Index("ix_seymours_hex_color", "hex_color"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
