@@ -215,6 +215,26 @@ UNIQUE_ALL_HEXES = list(dict.fromkeys(UNIQUE_KEY_HEXES + UNIQUE_DYE_HEXES))
 ALL_ITEM_LABS = ALL_LAB[_hex_list_to_ints(UNIQUE_ALL_HEXES)]
 ALL_ITEM_TREE = cKDTree(ALL_ITEM_LABS)
 
+STATIC_DIR = os.path.join(os.path.dirname(__file__), '..', 'static')
+
+def _load_precomputed_matches():
+    keys_idx_path = os.path.join(STATIC_DIR, 'hex_matches_keys.npy')
+    keys_de_path = os.path.join(STATIC_DIR, 'hex_matches_keys_de.npy')
+    all_idx_path = os.path.join(STATIC_DIR, 'hex_matches_all.npy')
+    all_de_path = os.path.join(STATIC_DIR, 'hex_matches_all_de.npy')
+    
+    if all(os.path.exists(p) for p in [keys_idx_path, keys_de_path, all_idx_path, all_de_path]):
+        return (
+            np.load(keys_idx_path),
+            np.load(keys_de_path),
+            np.load(all_idx_path),
+            np.load(all_de_path),
+        )
+    return None, None, None, None
+
+HEX_MATCH_KEYS_IDX, HEX_MATCH_KEYS_DE, HEX_MATCH_ALL_IDX, HEX_MATCH_ALL_DE = _load_precomputed_matches()
+USE_PRECOMPUTED = HEX_MATCH_KEYS_IDX is not None
+
 def _build_hex_to_pieces():
     mapping = {}
     for hex_code, piece_idx in KEY_ITEM_HEXES:
@@ -247,6 +267,11 @@ def _hex_to_targets(hex_code: str) -> list[tuple[str, int]]:
 
 
 def find_top_hex_matches(hex_code: str, limit: int = 3, include_dyes: bool = False) -> list[tuple[str, float]]:
+    if USE_PRECOMPUTED and limit == 1:
+        idx_arr, de_arr, hex_list = (HEX_MATCH_ALL_IDX, HEX_MATCH_ALL_DE, UNIQUE_ALL_HEXES) if include_dyes else (HEX_MATCH_KEYS_IDX, HEX_MATCH_KEYS_DE, UNIQUE_KEY_HEXES)
+        i = int(hex_code, 16)
+        return [(hex_list[idx_arr[i]], float(de_arr[i]))]
+    
     hex_list, tree = (UNIQUE_ALL_HEXES, ALL_ITEM_TREE) if include_dyes else (UNIQUE_KEY_HEXES, KEY_ITEM_TREE)
     dists, indices = tree.query(get_lab(hex_code), k=limit)
     if limit == 1:
@@ -258,10 +283,15 @@ def find_top_hex_matches_batch(hex_codes: list[str], include_dyes: bool = False)
     if not hex_codes:
         return {}
     
-    hex_list, tree = (UNIQUE_ALL_HEXES, ALL_ITEM_TREE) if include_dyes else (UNIQUE_KEY_HEXES, KEY_ITEM_TREE)
     unique_hexes = list(dict.fromkeys(h.upper() for h in hex_codes))
-    input_labs = ALL_LAB[_hex_list_to_ints(unique_hexes)]
     
+    if USE_PRECOMPUTED:
+        idx_arr, de_arr, hex_list = (HEX_MATCH_ALL_IDX, HEX_MATCH_ALL_DE, UNIQUE_ALL_HEXES) if include_dyes else (HEX_MATCH_KEYS_IDX, HEX_MATCH_KEYS_DE, UNIQUE_KEY_HEXES)
+        ints = _hex_list_to_ints(unique_hexes)
+        return {h: (hex_list[idx_arr[i]], float(de_arr[i])) for h, i in zip(unique_hexes, ints)}
+    
+    hex_list, tree = (UNIQUE_ALL_HEXES, ALL_ITEM_TREE) if include_dyes else (UNIQUE_KEY_HEXES, KEY_ITEM_TREE)
+    input_labs = ALL_LAB[_hex_list_to_ints(unique_hexes)]
     dists, indices = tree.query(input_labs, k=1)
     return {h: (hex_list[indices[i]], float(dists[i])) for i, h in enumerate(unique_hexes)}
 

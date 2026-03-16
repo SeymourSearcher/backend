@@ -264,12 +264,10 @@ async def list_available_sets():
     return sorted(SETS.keys())
 
 
-def trim_outliers(prices: list[int], lower_pct: float = 0.05, upper_pct: float = 0.95) -> list[int]:
-    if len(prices) < 10:
-        return prices
-    lower_idx = int(len(prices) * lower_pct)
-    upper_idx = int(len(prices) * upper_pct)
-    return prices[lower_idx:upper_idx]
+def get_percentile_indices(n: int, lower_pct: float = 0.05, upper_pct: float = 0.95) -> tuple[int, int]:
+    lower_idx = int(n * lower_pct)
+    upper_idx = int(n * upper_pct)
+    return lower_idx, upper_idx
 
 
 def compute_price_buckets(prices: list[int], bucket_count: int = 8) -> list[PriceBucket]:
@@ -277,39 +275,67 @@ def compute_price_buckets(prices: list[int], bucket_count: int = 8) -> list[Pric
         return []
     
     prices = sorted(prices)
-    trimmed = trim_outliers(prices)
-    if not trimmed:
-        return []
+    n = len(prices)
     
-    min_price = trimmed[0]
-    max_price = trimmed[-1]
-    price_range = max_price - min_price
-    
-    if price_range == 0:
+    if n < 10:
+        min_price, max_price = prices[0], prices[-1]
+        price_range = max_price - min_price
+        if price_range == 0:
+            return [PriceBucket(label=f"{min_price:,}", count=n, min_price=min_price, max_price=max_price)]
         return [PriceBucket(
-            label=f"{min_price:,}",
-            count=len(trimmed),
-            min_price=min_price,
-            max_price=max_price
+            label=f"{format_price(min_price)} - {format_price(max_price)}",
+            count=n, min_price=min_price, max_price=max_price
         )]
     
-    bucket_count = min(bucket_count, max(4, len(trimmed) // 10))
-    bucket_size = price_range / bucket_count
+    lower_idx, upper_idx = get_percentile_indices(n)
+    lower_prices = prices[:lower_idx]
+    middle_prices = prices[lower_idx:upper_idx]
+    upper_prices = prices[upper_idx:]
+    
+    if not middle_prices:
+        return []
     
     buckets = []
-    for i in range(bucket_count):
-        bucket_min = int(min_price + i * bucket_size)
-        bucket_max = int(min_price + (i + 1) * bucket_size) if i < bucket_count - 1 else max_price + 1
+    
+    if lower_prices:
         buckets.append(PriceBucket(
-            label=f"{format_price(bucket_min)} - {format_price(bucket_max)}",
-            count=0,
-            min_price=bucket_min,
-            max_price=bucket_max
+            label=f"< {format_price(middle_prices[0])}",
+            count=len(lower_prices),
+            min_price=lower_prices[0],
+            max_price=middle_prices[0] - 1
         ))
     
-    for price in trimmed:
-        idx = min(bucket_count - 1, int((price - min_price) / bucket_size))
-        buckets[idx].count += 1
+    mid_min = middle_prices[0]
+    mid_max = middle_prices[-1]
+    mid_range = mid_max - mid_min
+    
+    if mid_range == 0:
+        buckets.append(PriceBucket(label=f"{mid_min:,}", count=len(middle_prices), min_price=mid_min, max_price=mid_max))
+    else:
+        mid_bucket_count = min(bucket_count - 2, max(4, len(middle_prices) // 10))
+        bucket_size = mid_range / mid_bucket_count
+        
+        for i in range(mid_bucket_count):
+            bucket_min = int(mid_min + i * bucket_size)
+            bucket_max = int(mid_min + (i + 1) * bucket_size) if i < mid_bucket_count - 1 else mid_max + 1
+            buckets.append(PriceBucket(
+                label=f"{format_price(bucket_min)} - {format_price(bucket_max)}",
+                count=0,
+                min_price=bucket_min,
+                max_price=bucket_max
+            ))
+        
+        for price in middle_prices:
+            idx = min(mid_bucket_count - 1, int((price - mid_min) / bucket_size))
+            buckets[len(buckets) - mid_bucket_count + idx].count += 1
+    
+    if upper_prices:
+        buckets.append(PriceBucket(
+            label=f"> {format_price(middle_prices[-1])}",
+            count=len(upper_prices),
+            min_price=middle_prices[-1] + 1,
+            max_price=upper_prices[-1]
+        ))
     
     return buckets
 
