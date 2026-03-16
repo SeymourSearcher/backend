@@ -87,22 +87,21 @@ def build_filters(model, hex_color: str | None, pieces: list[int] | None, min_pr
     return and_(*conditions) if conditions else True
 
 
+def passes_tier_and_set_filter(auction, tier: str | None, target_hexes: set | None) -> bool:
+    if target_hexes and auction.target_hex not in target_hexes:
+        return False
+    if tier:
+        tier_range = TIER_THRESHOLDS.get(tier)
+        if tier_range and not (tier_range[0] <= auction.delta_e < tier_range[1]):
+            return False
+    return True
+
+
 def filter_by_tier_and_set(auctions: list, tier: str | None, set_name: str | None) -> list:
     if not tier and not set_name:
         return auctions
-    
     target_hexes = set(get_set_target_hexes(set_name)) if set_name else None
-    tier_range = TIER_THRESHOLDS.get(tier) if tier else None
-    
-    filtered = []
-    for a in auctions:
-        if target_hexes and a.target_hex not in target_hexes:
-            continue
-        if tier_range:
-            if not (tier_range[0] <= a.delta_e < tier_range[1]):
-                continue
-        filtered.append(a)
-    return filtered
+    return [a for a in auctions if passes_tier_and_set_filter(a, tier, target_hexes)]
 
 
 def sort_auctions(auctions: list, sort_by: str, sort_order: str, is_ended: bool = False):
@@ -114,6 +113,63 @@ def sort_auctions(auctions: list, sort_by: str, sort_order: str, is_ended: bool 
     elif sort_by == "timestamp" and is_ended:
         return sorted(auctions, key=lambda a: a.timestamp, reverse=reverse)
     return auctions
+
+
+async def fetch_with_post_filter(
+    db: AsyncSession,
+    model,
+    response_cls,
+    filters,
+    sort_col,
+    order_func,
+    skip: int,
+    limit: int,
+    tier: str | None,
+    set_name: str | None,
+    include_dyes: bool,
+    batch_multiplier: int = 10,
+):
+    """Fetch auctions in batches, applying post-filters until we have enough results."""
+    target_hexes = set(get_set_target_hexes(set_name)) if set_name else None
+    batch_size = limit * batch_multiplier
+    offset = 0
+    collected = []
+    total_scanned = 0
+    
+    while True:
+        query = (
+            select(model)
+            .where(filters)
+            .order_by(order_func(sort_col))
+            .offset(offset)
+            .limit(batch_size)
+        )
+        result = await db.execute(query)
+        batch = list(result.scalars().all())
+        
+        if not batch:
+            break
+        
+        total_scanned += len(batch)
+        enriched = enrich_auctions_batch(batch, response_cls, include_dyes)
+        
+        for a in enriched:
+            if passes_tier_and_set_filter(a, tier, target_hexes):
+                collected.append(a)
+        
+        if len(collected) >= skip + limit:
+            break
+        
+        offset += batch_size
+        
+        if len(batch) < batch_size:
+            break
+    
+    paginated = collected[skip:skip + limit]
+    total = len(collected)
+    has_more = len(collected) > skip + limit or (len(batch) == batch_size if batch else False)
+    
+    return paginated, total, has_more
 
 
 @router.get("/active", response_model=ActiveAuctionListResponse)
@@ -134,21 +190,17 @@ async def list_active_auctions(
 ):
     piece_list = [int(p) for p in pieces.split(",") if p.isdigit()] if pieces else None
     filters = build_filters(ActiveAuction, hex_color, piece_list, min_price, max_price, bin_filter)
+    sort_col = ActiveAuction.price if sort_by == "price" else ActiveAuction.end_time
+    order_func = desc if sort_order == "desc" else asc
     
     needs_post_filter = tier is not None or set_name is not None
     
     if needs_post_filter:
-        result = await db.execute(select(ActiveAuction).where(filters))
-        auctions = list(result.scalars().all())
-        enriched = enrich_auctions_batch(auctions, ActiveAuctionResponse, include_dyes)
-        filtered = filter_by_tier_and_set(enriched, tier, set_name)
-        sorted_auctions = sort_auctions(filtered, sort_by, sort_order)
-        total = len(sorted_auctions)
-        paginated = sorted_auctions[skip:skip + limit]
+        paginated, total, _ = await fetch_with_post_filter(
+            db, ActiveAuction, ActiveAuctionResponse, filters,
+            sort_col, order_func, skip, limit, tier, set_name, include_dyes
+        )
     else:
-        sort_col = ActiveAuction.price if sort_by == "price" else ActiveAuction.end_time
-        order_func = desc if sort_order == "desc" else asc
-        
         count_result = await db.execute(select(func.count()).select_from(ActiveAuction).where(filters))
         total = count_result.scalar() or 0
         
@@ -183,21 +235,17 @@ async def list_ended_auctions(
 ):
     piece_list = [int(p) for p in pieces.split(",") if p.isdigit()] if pieces else None
     filters = build_filters(EndedAuction, hex_color, piece_list, min_price, max_price, bin_filter)
+    sort_col = EndedAuction.price if sort_by == "price" else EndedAuction.timestamp
+    order_func = desc if sort_order == "desc" else asc
     
     needs_post_filter = tier is not None or set_name is not None
     
     if needs_post_filter:
-        result = await db.execute(select(EndedAuction).where(filters))
-        auctions = list(result.scalars().all())
-        enriched = enrich_auctions_batch(auctions, EndedAuctionResponse, include_dyes)
-        filtered = filter_by_tier_and_set(enriched, tier, set_name)
-        sorted_auctions = sort_auctions(filtered, sort_by, sort_order, is_ended=True)
-        total = len(sorted_auctions)
-        paginated = sorted_auctions[skip:skip + limit]
+        paginated, total, _ = await fetch_with_post_filter(
+            db, EndedAuction, EndedAuctionResponse, filters,
+            sort_col, order_func, skip, limit, tier, set_name, include_dyes
+        )
     else:
-        sort_col = EndedAuction.price if sort_by == "price" else EndedAuction.timestamp
-        order_func = desc if sort_order == "desc" else asc
-        
         count_result = await db.execute(select(func.count()).select_from(EndedAuction).where(filters))
         total = count_result.scalar() or 0
         
@@ -405,6 +453,44 @@ def compute_stats(auctions: list) -> dict:
     }
 
 
+async def fetch_all_with_post_filter(
+    db: AsyncSession,
+    model,
+    response_cls,
+    filters,
+    tier: str | None,
+    set_name: str | None,
+    include_dyes: bool,
+    batch_size: int = 5000,
+    max_results: int = 50000,
+):
+    """Fetch all matching auctions in batches for stats computation."""
+    target_hexes = set(get_set_target_hexes(set_name)) if set_name else None
+    offset = 0
+    collected = []
+    
+    while len(collected) < max_results:
+        query = select(model).where(filters).offset(offset).limit(batch_size)
+        result = await db.execute(query)
+        batch = list(result.scalars().all())
+        
+        if not batch:
+            break
+        
+        enriched = enrich_auctions_batch(batch, response_cls, include_dyes)
+        
+        for a in enriched:
+            if passes_tier_and_set_filter(a, tier, target_hexes):
+                collected.append(a)
+        
+        if len(batch) < batch_size:
+            break
+        
+        offset += batch_size
+    
+    return collected
+
+
 @router.get("/stats", response_model=AuctionStatsResponse)
 async def get_auction_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -420,10 +506,17 @@ async def get_auction_stats(
     piece_list = [int(p) for p in pieces.split(",") if p.isdigit()] if pieces else None
     filters = build_filters(EndedAuction, hex_color, piece_list, min_price, max_price, bin_filter)
     
-    result = await db.execute(select(EndedAuction).where(filters))
-    auctions = list(result.scalars().all())
-    enriched = enrich_auctions_batch(auctions, EndedAuctionResponse, include_dyes)
-    filtered = filter_by_tier_and_set(enriched, tier, set_name)
+    needs_post_filter = tier is not None or set_name is not None
+    
+    if needs_post_filter:
+        filtered = await fetch_all_with_post_filter(
+            db, EndedAuction, EndedAuctionResponse, filters,
+            tier, set_name, include_dyes
+        )
+    else:
+        result = await db.execute(select(EndedAuction).where(filters))
+        auctions = list(result.scalars().all())
+        filtered = enrich_auctions_batch(auctions, EndedAuctionResponse, include_dyes)
     
     return AuctionStatsResponse(**compute_stats(filtered))
 
