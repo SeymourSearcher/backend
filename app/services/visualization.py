@@ -1,20 +1,22 @@
 import numpy as np
-from scipy.spatial import cKDTree
 import plotly.graph_objects as go
 
-from .compute import ALL_LAB, KEY_ITEM_LABS, DYE_LABS, _hex_list_to_ints, KEY_PIECE_TREES, ALL_PIECE_TREES
-
-
-def _get_target_labs(include_dyes: bool) -> np.ndarray:
-    if include_dyes:
-        return np.vstack([KEY_ITEM_LABS, DYE_LABS])
-    return KEY_ITEM_LABS
+from app.pieces import PIECE_COUNT, Piece
+from app.services.compute import (
+    ALL_ITEM_TREE,
+    ALL_LAB,
+    ALL_PIECE_TREES,
+    KEY_ITEM_TREE,
+    KEY_PIECE_TREES,
+    _hex_list_to_ints,
+)
 
 
 def compute_distances(input_hex_codes: list[str] | None, include_dyes: bool) -> tuple[np.ndarray, np.ndarray]:
-    target_labs = _get_target_labs(include_dyes)
-    tree = cKDTree(target_labs)
-    
+    # ALL_ITEM_TREE covers the same point set as KEY_ITEM_LABS + DYE_LABS, so
+    # nearest-neighbour distances are unchanged by reusing the prebuilt trees.
+    tree = ALL_ITEM_TREE if include_dyes else KEY_ITEM_TREE
+
     if input_hex_codes:
         input_ints = _hex_list_to_ints(input_hex_codes)
         input_labs = ALL_LAB[input_ints]
@@ -26,7 +28,7 @@ def compute_distances(input_hex_codes: list[str] | None, include_dyes: bool) -> 
 
 
 def compute_distances_with_pieces(
-    input_seymours: list[tuple[str, int]],
+    input_seymours: list[tuple[str, Piece]],
     include_dyes: bool
 ) -> tuple[np.ndarray, np.ndarray]:
     trees = ALL_PIECE_TREES if include_dyes else KEY_PIECE_TREES
@@ -34,7 +36,7 @@ def compute_distances_with_pieces(
     all_indices = []
     all_distances = []
     
-    for piece_idx in range(4):
+    for piece_idx in range(PIECE_COUNT):
         tree = trees[piece_idx]
         if tree is None:
             continue
@@ -59,7 +61,7 @@ def generate_color_mask(
     min_de: float,
     max_de: float,
     input_hex_codes: list[str] | None,
-    input_seymours: list[tuple[str, int]] | None,
+    input_seymours: list[tuple[str, Piece]] | None,
     include_dyes: bool
 ) -> tuple[np.ndarray, int]:
     if input_seymours:

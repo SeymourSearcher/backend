@@ -21,7 +21,7 @@ TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.integration
 
 from app.database import Base  # noqa: E402
-from app.dependencies import get_db  # noqa: E402
+from app.dependencies import get_db, get_redis  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import User  # noqa: E402
 
@@ -69,13 +69,24 @@ async def other_user(db):
 
 
 @pytest.fixture
-async def client(clean_db, sessionmaker):
+async def redis():
+    """In-process Redis, so the suite needs only the MySQL container."""
+    import fakeredis.aioredis
+
+    client = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    yield client
+    await client.aclose()
+
+
+@pytest.fixture
+async def client(clean_db, sessionmaker, redis):
     """Anonymous client. Override get_current_user via `as_user` for authed calls."""
     async def override_db():
         async with sessionmaker() as session:
             yield session
 
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_redis] = lambda: redis
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
@@ -97,3 +108,12 @@ def as_user(sessionmaker):
         app.dependency_overrides[get_current_user] = override
 
     return _login
+
+
+@pytest.fixture(autouse=True)
+def no_upstream_lookups(monkeypatch):
+    """attach_names would otherwise call the live username API."""
+    async def fake(db, uuids):
+        return {uuid: f"player-{uuid[:4]}" for uuid in uuids}
+
+    monkeypatch.setattr("app.services.auction_queries.get_player_names", fake)

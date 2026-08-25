@@ -14,14 +14,6 @@ pytestmark = pytest.mark.integration
 BASE_MS = 1_700_000_000_000
 
 
-@pytest.fixture(autouse=True)
-def no_upstream_lookups(monkeypatch):
-    async def fake(db, uuids):
-        return {uuid: f"player-{uuid[:4]}" for uuid in uuids}
-
-    monkeypatch.setattr("app.services.auction_queries.get_player_names", fake)
-
-
 @pytest.fixture
 async def bids(db):
     """Three auctions, one bid each, bid timestamps ascending with the index."""

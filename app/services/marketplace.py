@@ -1,9 +1,10 @@
 from app.clock import utcnow
 from app.models import OrderStatus, SellOrder
+from app.pieces import Piece
 from app.services.compute import delta_e, get_lab, SETS, ITEM_TO_INFO, find_matching_seymours, KEY_ITEM_HEXES, HEX_TO_ITEMS, ITEM_TO_SET
 from app.services.matching import TIER_THRESHOLDS
 
-def get_set_available_pieces(set_name: str) -> list[int]:
+def get_set_available_pieces(set_name: str) -> list[Piece]:
     available = set()
     for item_name in SETS.get(set_name, []):
         info = ITEM_TO_INFO.get(item_name)
@@ -12,7 +13,7 @@ def get_set_available_pieces(set_name: str) -> list[int]:
     return sorted(available)
 
 
-def get_all_sets_pieces() -> dict[str, list[int]]:
+def get_all_sets_pieces() -> dict[str, list[Piece]]:
     return {set_name: get_set_available_pieces(set_name) for set_name in SETS}
 
 

@@ -1,5 +1,6 @@
 from typing import Optional
 
+from fastapi import UploadFile
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +14,7 @@ from app.services.cache import (
     get_cached_seymour_results,
     get_cached_user_seymours,
     invalidate_global_stats,
+    invalidate_hex_info,
     invalidate_rankings,
     invalidate_user_seymours,
     set_cached_available_filters,
@@ -29,6 +31,27 @@ from app.services.seymour_filters import (
 )
 
 MAX_UPLOAD_ROWS = 100_000
+
+# Comfortably above MAX_UPLOAD_ROWS in the heaviest (JSON) format, so the row
+# limit is what users actually hit. Enforced while reading because the row
+# count is only knowable after parsing.
+MAX_UPLOAD_BYTES = 16 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+async def read_upload(file: UploadFile) -> str:
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(UPLOAD_CHUNK_BYTES):
+        total += len(chunk)
+        if total > MAX_UPLOAD_BYTES:
+            raise InvalidInputError("File is too large to upload")
+        chunks.append(chunk)
+
+    try:
+        return b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError:
+        raise InvalidInputError("File must be UTF-8 encoded text")
 
 
 async def get_user_seymours(db: AsyncSession, redis: Redis, user_id: int) -> list[Seymour]:
@@ -148,6 +171,7 @@ async def replace_all(
     await invalidate_global_stats(redis)
     await invalidate_user_seymours(redis, user.id)
     await invalidate_rankings(redis)
+    await invalidate_hex_info(redis)
 
     return len(parsed), skipped
 

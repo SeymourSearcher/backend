@@ -85,14 +85,12 @@ async def upsert_ended_auctions_batch(db: AsyncSession, auctions: list[SeymourEn
 
 
 async def sync_bids_batch(db: AsyncSession, auctions: list[SeymourAuction]):
-    # Collect all auction IDs that have bids
     auctions_with_bids = [a for a in auctions if not a.is_bin and a.bids]
     if not auctions_with_bids:
         return
     
     auction_ids = [a.auction_id for a in auctions_with_bids]
     
-    # Fetch all existing bid timestamps for these auctions in one query
     existing = await db.execute(
         select(Bid.auction_id, Bid.timestamp).where(Bid.auction_id.in_(auction_ids))
     )
@@ -100,7 +98,6 @@ async def sync_bids_batch(db: AsyncSession, auctions: list[SeymourAuction]):
     for auction_id, timestamp in existing.fetchall():
         existing_by_auction.setdefault(auction_id, set()).add(timestamp)
     
-    # Build list of new bids
     new_bids = []
     for auction in auctions_with_bids:
         existing_timestamps = existing_by_auction.get(auction.auction_id, set())
@@ -114,14 +111,12 @@ async def sync_bids_batch(db: AsyncSession, auctions: list[SeymourAuction]):
                 })
     
     if new_bids:
-        # Batch insert new bids
         await db.execute(insert(Bid).values(new_bids))
 
 
 async def sync_active_auctions(db: AsyncSession) -> set[str]:
     raw_auctions = await get_all_auctions()
     
-    # Parse all auctions first
     parsed_auctions = []
     for raw in raw_auctions:
         parsed = parse_active_auction(raw)
@@ -130,7 +125,6 @@ async def sync_active_auctions(db: AsyncSession) -> set[str]:
     
     active_ids = {a.auction_id for a in parsed_auctions}
     
-    # Batch upsert auctions
     for i in range(0, len(parsed_auctions), BATCH_SIZE):
         batch = parsed_auctions[i:i + BATCH_SIZE]
         await upsert_active_auctions_batch(db, batch)
@@ -139,31 +133,27 @@ async def sync_active_auctions(db: AsyncSession) -> set[str]:
     return active_ids
 
 
-async def sync_ended_auctions(db: AsyncSession, active_ids: set[str]):
+async def sync_ended_auctions(db: AsyncSession):
     data = await get_auctions_ended()
     raw_ended = data.get("auctions", [])
-    
-    # Parse all ended auctions first
+
     parsed_auctions = []
     for raw in raw_ended:
         parsed = parse_ended_auction(raw)
         if parsed:
             parsed_auctions.append(parsed)
-    
+
     ended_ids = {a.auction_id for a in parsed_auctions}
-    
-    # Batch upsert ended auctions
+
     for i in range(0, len(parsed_auctions), BATCH_SIZE):
         batch = parsed_auctions[i:i + BATCH_SIZE]
         await upsert_ended_auctions_batch(db, batch)
-    
-    # Remove auctions that have ended from active table
+
     if ended_ids:
         await db.execute(
             delete(ActiveAuction).where(ActiveAuction.auction_id.in_(ended_ids))
         )
-    
-    # Remove active auctions not updated in the last STALE_THRESHOLD_MINUTES
+
     stale_cutoff = utcnow() - timedelta(minutes=STALE_THRESHOLD_MINUTES)
     await db.execute(
         delete(ActiveAuction).where(ActiveAuction.last_updated < stale_cutoff)
@@ -183,10 +173,10 @@ async def run_active_sync():
             raise
 
 
-async def run_ended_sync(active_ids: set[str] | None = None):
+async def run_ended_sync():
     async with async_session() as db:
         try:
-            await sync_ended_auctions(db, active_ids or set())
+            await sync_ended_auctions(db)
             await db.commit()
             logger.info("Ended auction sync complete.")
         except Exception as e:

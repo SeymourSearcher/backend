@@ -1,13 +1,12 @@
 import numpy as np
 import json
-import time
 import os
 from collections import Counter
 from heapq import heapify, heappop, heappush
 from itertools import chain
 from scipy.spatial import cKDTree
 
-from app.pieces import SLOT_TO_PIECE
+from app.pieces import PIECE_COUNT, Piece, SLOT_TO_PIECE
 
 def _build_lab_table():
     #Makes mapping of RGB -> LAB
@@ -47,26 +46,6 @@ def _build_lab_table():
 ALL_LAB = _build_lab_table()
 
 
-'''
-take a list of hex codes -> all cases of delta e < 10 and the abs
-[('FFFF00', 0), ('FFFF00', 1), ('FFFF00', 2), ('FFFF00', 3), ('FFD700', 0), ('FFD700', 1), ('FFD700', 2), ('FFD700', 3), ('E0FCF7', 0), ('E0FCF7', 1)]
-Seymour Export - 17581 pieces
-17581
-[('15E9E8', 3), ('893F15', 3), ('16FAEF', 3), ('EED7A2', 0), ('FAFC2E', 1), ('EF7139', 2), ('1FB8EC', 0), ('2307D3', 1), ('E89617', 3), ('3E23B6', 0)]
-
-
-find sets for the users hex codes
-
-involving others:
-query to find pieces to buy from others to get
-duplicates
-make a complete set
-
-'''
-
-def all_hex_codes():
-    return list(range(0x1000000))
-
 def seymour_converter(list_of_seymours):
     return [(i.hex_color, i.item_name.value) for i in list_of_seymours]
 
@@ -105,7 +84,7 @@ def _get_piece_tree_and_hexes(key_item_hexes, include_dyes):
         target_hexes.extend(FADE_DYE_HEXES)
     target_by_piece = _group_by_piece(target_hexes)
     
-    piece_hexes = [target_by_piece.get(p, []) for p in range(4)]
+    piece_hexes = [target_by_piece.get(p, []) for p in range(PIECE_COUNT)]
     trees = []
     for hexes in piece_hexes:
         if hexes:
@@ -156,7 +135,7 @@ def find_matching_seymours(user_seymours, key_item_hexes, threshold=10.0, best_o
     user_by_piece = _group_by_piece(user_seymours)
     results = []
     
-    for piece in range(4):
+    for piece in range(PIECE_COUNT):
         user_hexes = user_by_piece.get(piece)
         target_hexes = piece_hexes[piece]
         tree = trees[piece]
@@ -205,7 +184,7 @@ def _load_item_data():
         stage = int(stage)
         fade_dyes.setdefault(dye_name, {})[stage] = hex_code
         hex_to_dye_stage.setdefault(hex_code, []).append((dye_name, stage))
-        for piece in range(4):
+        for piece in range(PIECE_COUNT):
             fade_dye_hexes.append((hex_code, piece))
     
     hex_words = set(w.upper() for w in data.get('HEX_WORDS', []))
@@ -255,28 +234,23 @@ def _load_hex_neighborhoods():
 
 HEX_NEIGHBORHOODS_KEYS, HEX_NEIGHBORHOODS_ALL = _load_hex_neighborhoods()
 
-def get_hex_neighborhood(target_hex: str, include_dyes: bool = False) -> list[str]:
-    data = HEX_NEIGHBORHOODS_ALL if include_dyes else HEX_NEIGHBORHOODS_KEYS
-    neighbors = data.get(target_hex, np.array([], dtype=np.uint32))
-    return [f"{i:06X}" for i in neighbors]
-
 def _build_hex_to_pieces():
     mapping = {}
     for hex_code, piece_idx in KEY_ITEM_HEXES:
         mapping.setdefault(hex_code, set()).add(piece_idx)
     for hex_code in UNIQUE_DYE_HEXES:
-        mapping[hex_code] = {0, 1, 2, 3}
+        mapping[hex_code] = set(Piece)
     return mapping
 
 HEX_TO_PIECES = _build_hex_to_pieces()
 
 def _build_piece_trees(hexes_with_pieces, include_dyes=False):
-    piece_hexes = [[] for _ in range(4)]
+    piece_hexes = [[] for _ in range(PIECE_COUNT)]
     for hex_code, piece_idx in hexes_with_pieces:
         piece_hexes[piece_idx].append(hex_code)
     if include_dyes:
         for hex_code in UNIQUE_DYE_HEXES:
-            for p in range(4):
+            for p in range(PIECE_COUNT):
                 piece_hexes[p].append(hex_code)
     piece_hexes = [list(dict.fromkeys(h)) for h in piece_hexes]
     piece_labs = [ALL_LAB[_hex_list_to_ints(h)] if h else np.empty((0, 3), dtype=np.float32) for h in piece_hexes]
@@ -285,10 +259,6 @@ def _build_piece_trees(hexes_with_pieces, include_dyes=False):
 
 KEY_PIECE_HEXES, KEY_PIECE_LABS, KEY_PIECE_TREES = _build_piece_trees(KEY_ITEM_HEXES, include_dyes=False)
 ALL_PIECE_HEXES, ALL_PIECE_LABS, ALL_PIECE_TREES = _build_piece_trees(KEY_ITEM_HEXES, include_dyes=True)
-
-
-def _hex_to_targets(hex_code: str) -> list[tuple[str, int]]:
-    return [(hex_code, p) for p in HEX_TO_PIECES.get(hex_code, {0, 1, 2, 3})]
 
 
 def find_top_hex_matches(hex_code: str, limit: int = 3, include_dyes: bool = False) -> list[tuple[str, float]]:
@@ -319,11 +289,6 @@ def find_top_hex_matches_batch(hex_codes: list[str], include_dyes: bool = False)
     input_labs = ALL_LAB[_hex_list_to_ints(unique_hexes)]
     dists, indices = tree.query(input_labs, k=1)
     return {h: (hex_list[indices[i]], float(dists[i])) for i, h in enumerate(unique_hexes)}
-
-
-def find_users_near_hex(seymour_list: list[tuple[str, int]], target_hex: str, threshold: float = 10.0) -> list[tuple[str, int, float]]:
-    matches = find_matching_seymours(seymour_list, _hex_to_targets(target_hex), threshold=threshold)
-    return [(user_hex, piece, de) for (user_hex, piece), _, de in matches]
 
 
 def _count_user_pieces(seymour_list):
@@ -390,7 +355,7 @@ def find_fade_dye_sets(seymour_list, threshold=5.0):
             demand = Counter()
             complete = True
             
-            for piece_idx in range(4):
+            for piece_idx in range(PIECE_COUNT):
                 match = dye_matches.get((dye_name, stage, piece_idx))
                 if not match:
                     complete = False
@@ -482,7 +447,7 @@ def find_incomplete_dye_sets(seymour_list, threshold=5.0):
             missing = []
             demand = Counter()
             
-            for piece_idx in range(4):
+            for piece_idx in range(PIECE_COUNT):
                 match = dye_matches.get((dye_name, stage, piece_idx))
                 if match:
                     user_hex, de = match
@@ -509,7 +474,7 @@ def _calc_avg_centroid_de(labs):
 
 def _get_piece_labs(seymour_list):
     by_piece = _group_by_piece(seymour_list)
-    pieces = [list(set(by_piece.get(i, []))) for i in range(4)]
+    pieces = [list(set(by_piece.get(i, []))) for i in range(PIECE_COUNT)]
     if not all(pieces):
         return None, None
     piece_ints = [np.array([int(h, 16) for h in p], dtype=np.uint32) for p in pieces]
@@ -709,28 +674,15 @@ def find_custom_sets(seymour_list, max_avg_delta_e=1.0):
     for position in selected:
         avg_de = scores[position]
         indices = candidate_indices[position].tolist()
-        hexes = [pieces[j][indices[j]] for j in range(4)]
-        labs = np.array([piece_labs[j][indices[j]] for j in range(4)])
+        hexes = [pieces[j][indices[j]] for j in range(PIECE_COUNT)]
+        labs = np.array([piece_labs[j][indices[j]] for j in range(PIECE_COUNT)])
         centroid = labs.mean(axis=0)
         piece_de = np.linalg.norm(labs - centroid, axis=1)
         
-        final_hexes = [hexes[inv_order[j]] for j in range(4)]
-        final_de = [piece_de[inv_order[j]] for j in range(4)]
+        final_hexes = [hexes[inv_order[j]] for j in range(PIECE_COUNT)]
+        final_de = [piece_de[inv_order[j]] for j in range(PIECE_COUNT)]
         
         results.append((f"Custom Set #{len(results) + 1}", float(avg_de),
-                       [(j, final_hexes[j], float(final_de[j])) for j in range(4)]))
+                       [(j, final_hexes[j], float(final_de[j])) for j in range(PIECE_COUNT)]))
     
     return results
-
-if __name__ == "__main__":
-    import sys
-    import os
-    # Add backend to path so absolute imports work
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-    
-    seymours = json.load(open(r"C:\Users\hexay\SeymourSearcher\seymour_list.json"))
-    target = [('D91E41', 1)]
-
-    matches = find_matching_seymours(seymours, target, threshold=10.0, best_only=True)
-    print(matches)
-

@@ -5,6 +5,7 @@ from redis.asyncio import Redis
 
 from app.dependencies import get_db, get_current_user, get_redis, get_optional_user
 from app.pieces import Piece
+from app.schemas.common import DetailResponse
 from app.schemas import SeymourResponse, UploadResponse, SeymourWithMatchResponse
 from app.services import seymours
 from app.models import User
@@ -63,8 +64,8 @@ async def upload_seymours(
     redis: Annotated[Redis, Depends(get_redis)],
     file: UploadFile = File(...)
 ):
-    content = await file.read()
-    imported, skipped = await seymours.replace_all(db, redis, user, content.decode("utf-8"))
+    content = await seymours.read_upload(file)
+    imported, skipped = await seymours.replace_all(db, redis, user, content)
     return UploadResponse(imported=imported, skipped=skipped)
 
 
@@ -77,7 +78,7 @@ async def get_seymour(
     return await seymours.get_owned(db, user, seymour_id)
 
 
-@router.delete("/{seymour_id}")
+@router.delete("/{seymour_id}", response_model=DetailResponse)
 async def delete_seymour(
     seymour_id: int,
     user: Annotated[User, Depends(get_current_user)],
@@ -88,7 +89,7 @@ async def delete_seymour(
     return {"detail": "Deleted"}
 
 
-@router.delete("/")
+@router.delete("/", response_model=DetailResponse)
 async def delete_all_seymours(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],

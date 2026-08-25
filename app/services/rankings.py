@@ -1,6 +1,4 @@
 import asyncio
-from concurrent.futures import ProcessPoolExecutor
-from functools import partial
 
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +19,18 @@ from app.services.stats import get_stats, sum_rankings_stats
 def _compute_user_ranking(user_data: dict, seymour_list: list) -> dict:
     stats = get_stats(seymour_list)
     return {**user_data, **stats}
+
+
+def _compute_rankings(user_data_list: list[tuple[dict, list]]) -> list[dict]:
+    """Deliberately serial, and deliberately not a ProcessPoolExecutor.
+
+    Each worker would re-import app.services.compute (~2.4s and ~200MB for the
+    LAB table) and every Seymour list would be pickled across the boundary; at
+    every measured size that cost more than the work itself. get_stats already
+    fans out over threads internally, so a single to_thread call keeps the event
+    loop free without paying for processes.
+    """
+    return [_compute_user_ranking(user_data, seymours) for user_data, seymours in user_data_list]
 
 
 async def user_stats(db: AsyncSession, redis: Redis, user: User) -> dict:
@@ -47,13 +57,7 @@ async def compute_and_cache_rankings(db: AsyncSession, redis: Redis) -> list[dic
         for u in users
     ]
 
-    loop = asyncio.get_running_loop()
-    with ProcessPoolExecutor() as executor:
-        tasks = [
-            loop.run_in_executor(executor, partial(_compute_user_ranking, user_data, seymour_list))
-            for user_data, seymour_list in user_data_list
-        ]
-        rankings = list(await asyncio.gather(*tasks))
+    rankings = await asyncio.to_thread(_compute_rankings, user_data_list)
 
     await set_cached_rankings(redis, rankings)
 

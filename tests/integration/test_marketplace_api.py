@@ -154,6 +154,26 @@ async def test_concurrent_listing_of_one_seymour_creates_exactly_one(
     assert sorted(r.status_code for r in responses) == [200, 400]
 
 
+async def test_created_sell_order_has_the_same_shape_as_a_fetched_one(
+    client, as_user, user, seeded
+):
+    """create() used to return raw ORM rows, so the POST silently omitted
+    seymour.match while every GET of the same resource included it."""
+    as_user(user)
+
+    created = (await client.post(
+        "/marketplace/orders/sell",
+        json={"seymour_ids": [seeded[3]], "price": 123, "expires_hours": 24},
+    )).json()
+
+    listed = (await client.get(
+        "/marketplace/orders/sell/mine", params={"status": "active"}
+    )).json()
+    fetched = next(o for o in listed["orders"] if o["id"] == created[0]["id"])
+
+    assert created[0] == fetched
+
+
 async def test_cannot_list_a_seymour_you_do_not_own(client, as_user, other_user, seeded):
     as_user(other_user)
     response = await client.post(

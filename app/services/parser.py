@@ -1,13 +1,24 @@
 import json
 import re
-from app.pieces import ITEM_ID_TO_PIECE, ITEM_NAME_TO_PIECE
+
+from pydantic import ValidationError
+
+from app.pieces import ITEM_ID_TO_PIECE, ITEM_NAME_TO_PIECE, Piece
 from app.schemas.seymour import SeymourCreate
 
 # Pattern for quoted format: "uuid" "Item Name" "HexColor" "Match Info"
 QUOTED_LINE_PATTERN = re.compile(r'"([^"]+)"\s+"([^"]+)"\s+"([^"]+)"\s+"([^"]+)"')
 
 # Pattern for markdown format: `VELVET_TOP_HAT`, hex: `0056E2` (**ORIGINAL**) - Location: ...
-MARKDOWN_LINE_PATTERN = re.compile(r'`([A-Z_]+)`,\s*hex:\s*`([0-9A-Fa-f]+)`')
+MARKDOWN_LINE_PATTERN = re.compile(r'`([A-Z_]+)`,\s*hex:\s*`([0-9A-Fa-f]{6})`')
+
+
+def _build(item_name: Piece, hex_color: str) -> SeymourCreate | None:
+    """None rather than raising: a malformed hex is a skipped line, not a failed upload."""
+    try:
+        return SeymourCreate(item_name=item_name, hex_color=hex_color)
+    except ValidationError:
+        return None
 
 
 def parse_pipe_format_line(line: str) -> SeymourCreate | None:
@@ -27,11 +38,8 @@ def parse_pipe_format_line(line: str) -> SeymourCreate | None:
 
     if item_name is None:
         return None
-    
-    return SeymourCreate(
-        item_name=item_name,
-        hex_color=hex_color,
-    )
+
+    return _build(item_name, hex_color)
 
 
 def parse_quoted_format_line(line: str) -> SeymourCreate | None:
@@ -48,10 +56,7 @@ def parse_quoted_format_line(line: str) -> SeymourCreate | None:
     if item_name is None:
         return None
 
-    return SeymourCreate(
-        item_name=item_name,
-        hex_color=hex_color,
-    )
+    return _build(item_name, hex_color)
 
 
 def parse_markdown_format_line(line: str) -> SeymourCreate | None:
@@ -66,11 +71,8 @@ def parse_markdown_format_line(line: str) -> SeymourCreate | None:
     item_name = ITEM_ID_TO_PIECE.get(item_name_enum)
     if item_name is None:
         return None
-    
-    return SeymourCreate(
-        item_name=item_name,
-        hex_color=hex_color,
-    )
+
+    return _build(item_name, hex_color)
 
 
 def parse_seymour_line(line: str) -> SeymourCreate | None:
@@ -119,8 +121,13 @@ def parse_json_format(content: str) -> tuple[list[SeymourCreate], int] | None:
         if item_name is None:
             skipped += 1
             continue
-        
-        parsed.append(SeymourCreate(item_name=item_name, hex_color=hex_code))
+
+        seymour = _build(item_name, hex_code)
+        if seymour is None:
+            skipped += 1
+            continue
+
+        parsed.append(seymour)
     
     return parsed, skipped
 
@@ -145,11 +152,3 @@ def parse_seymour_file(content: str) -> tuple[list[SeymourCreate], int]:
             skipped += 1
 
     return parsed, skipped
-
-
-if __name__ == "__main__":
-    with open(r"C:\Users\Hexay\Downloads\AllyMe's Export 2.9.2026.txt", 'r') as file:
-        content = file.read()
-        parsed, skipped = parse_seymour_file(content)
-        print(f"Parsed: {len(parsed)}")
-        print(f"Skipped: {skipped}")

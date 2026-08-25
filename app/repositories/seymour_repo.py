@@ -9,8 +9,18 @@ class SeymourRepository(BaseRepository):
         rows = await self.session.execute(select(Seymour).where(Seymour.user_id == user_id))
         return list(rows.scalars().all())
 
-    async def list_with_users(self) -> list[tuple[User, Seymour]]:
-        return list((await self.session.execute(select(User, Seymour).join(Seymour))).all())
+    async def list_owner_hexes(self) -> list[tuple[int, str, int, str | None, str]]:
+        """(user_id, username, discord_id, avatar_hash, hex_color) for every Seymour.
+
+        Columns rather than entities: the hex page walks the whole table, and
+        building ORM instances for rows it mostly discards dominated the request.
+        """
+        rows = await self.session.execute(
+            select(
+                User.id, User.username, User.discord_id, User.avatar_hash, Seymour.hex_color
+            ).join(Seymour)
+        )
+        return list(rows.all())
 
     async def delete_for_user(self, user_id: int) -> None:
         await self.session.execute(delete(Seymour).where(Seymour.user_id == user_id))

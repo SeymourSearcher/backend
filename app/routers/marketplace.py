@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db, get_current_user
 from app.models import User, OrderStatus, OrderType, Tier
 from app.pieces import Piece
+from app.schemas.common import DetailResponse
 from app.schemas.marketplace import (
     BuyOrderCreate,
     BuyOrderResponse,
@@ -147,7 +148,7 @@ async def list_my_sell_orders(
     return SellOrderListResponse(orders=orders, total=total)
 
 
-@router.delete("/orders/sell/{order_id}")
+@router.delete("/orders/sell/{order_id}", response_model=DetailResponse)
 async def cancel_sell_order(
     order_id: int,
     user: Annotated[User, Depends(get_current_user)],
@@ -165,7 +166,7 @@ async def get_order(
     return await buy_orders.get(db, order_id)
 
 
-@router.delete("/orders/{order_id}")
+@router.delete("/orders/{order_id}", response_model=DetailResponse)
 async def cancel_order(
     order_id: int,
     user: Annotated[User, Depends(get_current_user)],

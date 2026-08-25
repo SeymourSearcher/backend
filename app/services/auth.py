@@ -1,4 +1,6 @@
+import logging
 from datetime import timedelta
+
 import httpx
 from jose import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +11,8 @@ from app.errors import InvalidInputError
 from app.repositories.user_repo import UserRepository
 
 settings = get_settings()
+
+logger = logging.getLogger(__name__)
 
 DISCORD_API_URL = "https://discord.com/api/v10"
 
@@ -27,7 +31,9 @@ async def exchange_code(code: str) -> dict:
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         if not response.is_success:
-            print(f"Discord OAuth error: {response.status_code} - {response.text}")
+            logger.warning(
+                "Discord OAuth error: %s - %s", response.status_code, response.text
+            )
         response.raise_for_status()
         return response.json()
 

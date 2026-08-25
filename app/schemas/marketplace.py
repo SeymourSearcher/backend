@@ -1,7 +1,10 @@
+import re
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from app.models.marketplace import OrderType, OrderStatus, HexMatchType, Tier
 from app.pieces import Piece
+
+HEX6 = re.compile(r"^[0-9A-F]{6}$")
 
 
 class SetCriteriaCreate(BaseModel):
@@ -23,12 +26,17 @@ class HexCriteriaCreate(BaseModel):
     max_delta_e: float | None = None
     piece_type: Piece | None = None
 
-    @field_validator("hex_value")
-    @classmethod
-    def validate_hex_value(cls, v):
-        if len(v) != 6:
+    @model_validator(mode="after")
+    def validate_hex_value(self):
+        if len(self.hex_value) != 6:
             raise ValueError("hex_value must be 6 characters")
-        return v.upper()
+
+        self.hex_value = self.hex_value.upper()
+        # PATTERN binds non-hex characters as variables; every other mode feeds
+        # hex_value to int(v, 16), which raises on anything else.
+        if self.match_type is not HexMatchType.PATTERN and not HEX6.match(self.hex_value):
+            raise ValueError("hex_value must be a 6-digit hex colour")
+        return self
 
 
 class BuyOrderCreate(BaseModel):

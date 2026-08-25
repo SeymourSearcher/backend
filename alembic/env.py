@@ -7,8 +7,9 @@ from alembic import context
 
 from app.config import get_settings
 from app.database import Base
-# Import models to register them with Base.metadata
-from app.models import User, Seymour  # noqa: F401
+# Registers every model with Base.metadata; naming them individually meant a new
+# model could be silently missing from autogenerate.
+import app.models  # noqa: F401
 
 config = context.config
 settings = get_settings()

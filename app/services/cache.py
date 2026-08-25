@@ -21,6 +21,9 @@ RANKINGS_TTL = 900
 CUSTOM_SETS_PREFIX = "custom_sets:"
 CUSTOM_SETS_TTL = 3600
 
+HEX_INFO_PREFIX = "hex_info:"
+HEX_INFO_TTL = 1800
+
 
 def _hash_seymour_list(seymour_list: list) -> str:
     data = json.dumps(sorted(seymour_list), separators=(',', ':')).encode()
@@ -159,10 +162,6 @@ async def set_cached_user_stats(redis: Redis, user_id: int, stats: dict) -> None
     await set_cached(redis, _user_stats_key(user_id), stats, USER_STATS_TTL)
 
 
-async def invalidate_user_stats(redis: Redis, user_id: int) -> None:
-    await invalidate(redis, _user_stats_key(user_id))
-
-
 async def get_cached_rankings(redis: Redis) -> list[dict] | None:
     return await get_cached(redis, RANKINGS_KEY)
 
@@ -182,6 +181,25 @@ async def get_cached_custom_sets(redis: Redis, seymour_list: list) -> list | Non
 async def set_cached_custom_sets(redis: Redis, seymour_list: list, custom_sets: list) -> None:
     key = _custom_sets_key(_hash_seymour_list(seymour_list))
     await set_cached(redis, key, custom_sets, CUSTOM_SETS_TTL)
+
+
+def _hex_info_key(hex_code: str, include_dyes: bool) -> str:
+    return f"{HEX_INFO_PREFIX}{hex_code}:{include_dyes}"
+
+
+async def get_cached_hex_info(redis: Redis, hex_code: str, include_dyes: bool) -> dict | None:
+    return await get_cached(redis, _hex_info_key(hex_code, include_dyes))
+
+
+async def set_cached_hex_info(
+    redis: Redis, hex_code: str, include_dyes: bool, info: dict
+) -> None:
+    await set_cached(redis, _hex_info_key(hex_code, include_dyes), info, HEX_INFO_TTL)
+
+
+async def invalidate_hex_info(redis: Redis) -> None:
+    # Every user's inventory feeds every hex page, so one upload invalidates all.
+    await invalidate_pattern(redis, f"{HEX_INFO_PREFIX}*")
 
 
 RATE_LIMIT_PREFIX = "ratelimit:"

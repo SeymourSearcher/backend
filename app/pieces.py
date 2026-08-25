@@ -14,6 +14,8 @@ class Piece(IntEnum):
     BOOTS = 3
 
 
+PIECE_COUNT = len(Piece)
+
 SLOT_NAMES = ["helmet", "chestplate", "leggings", "boots"]
 ITEM_NAMES = ["Velvet Top Hat", "Cashmere Jacket", "Satin Trousers", "Oxford Shoes"]
 ITEM_IDS = ["VELVET_TOP_HAT", "CASHMERE_JACKET", "SATIN_TROUSERS", "OXFORD_SHOES"]

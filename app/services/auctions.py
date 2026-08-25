@@ -175,20 +175,3 @@ async def get_ended_seymour_auctions() -> list[SeymourEndedAuction]:
     data = await get_auctions_ended()
     auctions = data.get("auctions", [])
     return [a for auction in auctions if (a := parse_ended_auction(auction))]
-
-
-if __name__ == "__main__":
-    async def main():
-        print("Fetching active Seymour auctions...")
-        active = await get_active_seymour_auctions()
-        print(f"Found {len(active)} active Seymour auctions")
-        for a in active[:5]:
-            print(f"  {a.hex_color} piece={a.piece} price={a.price} bin={a.is_bin}")
-        
-        print("\nFetching ended Seymour auctions...")
-        ended = await get_ended_seymour_auctions()
-        print(f"Found {len(ended)} ended Seymour auctions")
-        for a in ended[:5]:
-            print(f"  {a.hex_color} piece={a.piece} price={a.price}")
-    
-    asyncio.run(main())

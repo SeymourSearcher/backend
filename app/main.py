@@ -12,6 +12,7 @@ from app.errors import (
     NotFoundError,
     PermissionDeniedError,
 )
+from app.schemas.common import HealthResponse
 from app.routers import auth, users, seymours, stats, hex, marketplace, visualization
 from app.routers import auctions as auctions_router
 from app.services.player import close_client
@@ -72,7 +73,7 @@ async def robots():
     return ROBOTS_TXT
 
 
-@app.get("/health")
+@app.get("/health", response_model=HealthResponse)
 async def health():
     return {"status": "ok"}
 

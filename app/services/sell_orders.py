@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import utcnow
 from app.errors import ConflictError, InvalidInputError, NotFoundError
-from app.models import OrderStatus, SellOrder, User
+from app.models import OrderStatus, User
 # Re-exported so routers reach the filter type through this service rather than
 # the repository layer.
 from app.repositories.marketplace_repo import SellOrderFilters, SellOrderRepository
@@ -13,7 +13,7 @@ from app.schemas.marketplace import SellOrderCreate
 from app.services.marketplace import build_sell_order_response, is_expired
 
 
-async def create(db: AsyncSession, user: User, data: SellOrderCreate) -> list[SellOrder]:
+async def create(db: AsyncSession, user: User, data: SellOrderCreate) -> list[dict]:
     owned = await SeymourRepository(db).lock_owned(data.seymour_ids, user.id)
 
     missing = set(data.seymour_ids) - set(owned)
@@ -33,9 +33,11 @@ async def create(db: AsyncSession, user: User, data: SellOrderCreate) -> list[Se
 
     await db.commit()
     for order in created:
-        await db.refresh(order, ["seymour", "user"])
+        # Timestamps included: DATETIME has no fractional seconds, so the
+        # in-memory values would otherwise differ from every later read.
+        await db.refresh(order, ["seymour", "user", "created_at", "expires_at"])
 
-    return created
+    return [build_sell_order_response(o) for o in created]
 
 
 async def list_active(

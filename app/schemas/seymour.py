@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict
 
 from app.pieces import Piece
+from app.schemas.fields import HexColor
 
 
 class SeymourBase(BaseModel):
@@ -9,7 +10,9 @@ class SeymourBase(BaseModel):
 
 
 class SeymourCreate(SeymourBase):
-    pass
+    # Narrowed on input only; responses echo whatever is stored, including
+    # lower-case rows written before this constraint existed.
+    hex_color: HexColor
 
 
 class SeymourResponse(SeymourBase):

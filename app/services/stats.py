@@ -1,6 +1,7 @@
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.compute import find_matching_seymours, find_sets
 from app.services.compute import KEY_ITEM_HEXES, HEX_WORDS
@@ -108,56 +109,18 @@ def sum_rankings_stats(rankings: list[dict]) -> dict:
     }
 
 
-async def get_global_stats(redis: Redis, db=None, rankings: list[dict] | None = None) -> dict:
+async def get_global_stats(redis: Redis, db: AsyncSession) -> dict:
     cached = await get_cached_global_stats(redis)
     if cached:
         return cached
-    
-    # If rankings provided, just sum them
-    if rankings:
-        stats = sum_rankings_stats(rankings)
-        await set_cached_global_stats(redis, stats)
-        return stats
-    
-    # Try to get cached rankings
+
     from app.services.cache import get_cached_rankings
     cached_rankings = await get_cached_rankings(redis)
     if cached_rankings:
         stats = sum_rankings_stats(cached_rankings)
         await set_cached_global_stats(redis, stats)
         return stats
-    
-    # No cached data - recompute rankings if db available
-    if db:
-        # Deferred: app.services.rankings imports this module at import time.
-        from app.services.rankings import compute_and_cache_rankings
-        rankings = await compute_and_cache_rankings(db, redis)
-        return sum_rankings_stats(rankings)
-    
-    # No db available - return empty stats
-    return {
-        "stars": 0,
-        "t1": 0,
-        "t2": 0,
-        "t3": 0,
-        "words": 0,
-        "dupes": 0,
-        "total_sets": 0,
-        "dyed_sets": 0,
-        "total_seymours": 0,
-    }
 
-
-if __name__ == "__main__":
-    import sys
-    import os
-    # Add backend to path so absolute imports work
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-    
-    from app.services.parser import parse_seymour_file
-    with open(r"C:\Users\Hexay\Downloads\AllyMe's Export 2.9.2026.txt", 'r') as f:
-        content = f.read()
-        parsed, skipped = parse_seymour_file(content)
-        seymour_list = seymour_converter(parsed)
-        
-    print(get_stats(seymour_list))
+    # Deferred: app.services.rankings imports this module at import time.
+    from app.services.rankings import compute_and_cache_rankings
+    return sum_rankings_stats(await compute_and_cache_rankings(db, redis))
