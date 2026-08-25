@@ -25,6 +25,7 @@ from app.services.cache import (
     set_cached_custom_sets,
 )
 from app.services.compute import find_matching_seymours, find_sets, find_incomplete_armor_sets, find_incomplete_dye_sets, find_custom_sets, KEY_ITEM_HEXES, HEX_TO_ITEMS, FADE_DYES, SETS, ITEM_TO_INFO, ITEM_TO_SET
+from app.services.matching import TIER_THRESHOLDS
 from app.models import User, Seymour
 
 router = APIRouter()
@@ -42,13 +43,6 @@ async def get_user_seymours(db: AsyncSession, redis: Redis, user_id: int) -> lis
         for s in seymours
     ])
     return seymours
-
-TIER_THRESHOLDS = {
-    "t1": (0, 2),
-    "t2": (2, 5),
-    "t3": (5, 10),
-}
-
 
 def _build_result(s: Seymour, match: Optional[dict] = None) -> dict:
     return {

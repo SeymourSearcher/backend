@@ -1,4 +1,5 @@
 from app.services.compute import delta_e, get_lab, SETS, ITEM_TO_INFO, find_matching_seymours, KEY_ITEM_HEXES, HEX_TO_ITEMS, ITEM_TO_SET
+from app.services.matching import TIER_THRESHOLDS
 
 def get_set_available_pieces(set_name: str) -> list[int]:
     available = set()
@@ -11,13 +12,6 @@ def get_set_available_pieces(set_name: str) -> list[int]:
 
 def get_all_sets_pieces() -> dict[str, list[int]]:
     return {set_name: get_set_available_pieces(set_name) for set_name in SETS}
-
-
-TIER_THRESHOLDS = {
-    "t1": (0, 2),
-    "t2": (2, 5),
-    "t3": (5, 10),
-}
 
 
 def _compute_delta_e(user_hex: str, target_hex: str) -> float:

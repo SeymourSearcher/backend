@@ -1,12 +1,13 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from sqlalchemy.dialects.mysql import insert
 
 from app.database import async_session
 from app.models import ActiveAuction, EndedAuction, Bid
+from app.services.matching import match_columns
 from app.services.auctions import (
     get_all_auctions,
     get_auctions_ended,
@@ -27,8 +28,9 @@ BATCH_SIZE = 500
 async def upsert_active_auctions_batch(db: AsyncSession, auctions: list[SeymourAuction]):
     if not auctions:
         return
-    
-    now = datetime.utcnow()
+
+    now = datetime.now(timezone.utc)
+    matches = match_columns([a.hex_color for a in auctions])
     values = [
         {
             "auction_id": a.auction_id,
@@ -41,10 +43,11 @@ async def upsert_active_auctions_batch(db: AsyncSession, auctions: list[SeymourA
             "hex_color": a.hex_color,
             "piece": a.piece,
             "last_updated": now,
+            **matches[a.hex_color.upper()],
         }
         for a in auctions
     ]
-    
+
     stmt = insert(ActiveAuction).values(values)
     stmt = stmt.on_duplicate_key_update(
         price=stmt.inserted.price,
@@ -57,7 +60,8 @@ async def upsert_active_auctions_batch(db: AsyncSession, auctions: list[SeymourA
 async def upsert_ended_auctions_batch(db: AsyncSession, auctions: list[SeymourEndedAuction]):
     if not auctions:
         return
-    
+
+    matches = match_columns([a.hex_color for a in auctions])
     values = [
         {
             "auction_id": a.auction_id,
@@ -69,10 +73,11 @@ async def upsert_ended_auctions_batch(db: AsyncSession, auctions: list[SeymourEn
             "hex_color": a.hex_color,
             "piece": a.piece,
             "timestamp": a.timestamp,
+            **matches[a.hex_color.upper()],
         }
         for a in auctions
     ]
-    
+
     stmt = insert(EndedAuction).values(values)
     stmt = stmt.on_duplicate_key_update(auction_id=stmt.inserted.auction_id)
     await db.execute(stmt)
@@ -158,7 +163,7 @@ async def sync_ended_auctions(db: AsyncSession, active_ids: set[str]):
         )
     
     # Remove active auctions not updated in the last STALE_THRESHOLD_MINUTES
-    stale_cutoff = datetime.utcnow() - timedelta(minutes=STALE_THRESHOLD_MINUTES)
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=STALE_THRESHOLD_MINUTES)
     await db.execute(
         delete(ActiveAuction).where(ActiveAuction.last_updated < stale_cutoff)
     )

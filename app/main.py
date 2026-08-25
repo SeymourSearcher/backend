@@ -1,6 +1,3 @@
-import asyncio
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
@@ -8,23 +5,11 @@ from fastapi.responses import PlainTextResponse
 from app.config import get_settings
 from app.routers import auth, users, seymours, stats, hex, marketplace, visualization
 from app.routers import auctions as auctions_router
-from app.services.auction_sync import start_sync_loop
 
 settings = get_settings()
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    task = asyncio.create_task(start_sync_loop())
-    yield
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-
-
-app = FastAPI(title="Seymour Searcher API", lifespan=lifespan)
+# Auction sync runs in a separate process; see app/worker.py.
+app = FastAPI(title="Seymour Searcher API")
 
 app.add_middleware(
     CORSMiddleware,

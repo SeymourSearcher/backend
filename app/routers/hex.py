@@ -12,15 +12,10 @@ from app.services.compute import (
     find_top_hex_matches, get_hex_neighborhood, get_lab, delta_e,
     HEX_TO_ITEMS, ITEM_TO_INFO, ITEM_TO_SET, HEX_TO_DYE_STAGE, FADE_DYES
 )
+from app.services.matching import get_tier
 from app.models import User, Seymour
 
 router = APIRouter()
-
-TIER_THRESHOLDS = {
-    "t1": (0, 2),
-    "t2": (2, 5),
-    "t3": (5, 10),
-}
 
 PIECE_NAMES = ["helmet", "chestplate", "leggings", "boots"]
 
@@ -32,13 +27,6 @@ def validate_hex(hex_code: str) -> str:
     if not HEX_PATTERN.match(hex_code):
         raise HTTPException(status_code=400, detail="Invalid hex code format")
     return hex_code
-
-
-def get_tier(de: float) -> str | None:
-    for tier, (min_de, max_de) in TIER_THRESHOLDS.items():
-        if min_de <= de < max_de:
-            return tier
-    return None
 
 
 def build_match_info(target_hex: str, de: float, include_dyes: bool = False) -> dict | None:
