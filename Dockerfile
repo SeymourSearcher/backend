@@ -18,6 +18,14 @@ FROM base AS worker
 CMD ["python", "-m", "app.worker"]
 
 
+# Runs the suite against the pinned dependency set rather than whatever is on
+# the developer's machine -- the pre_ping outage got through precisely because
+# local SQLAlchemy was newer than the pin. See scripts/run_tests.sh.
+FROM base AS test
+RUN pip install --no-cache-dir -r requirements-dev.txt
+CMD ["pytest"]
+
+
 # Last stage is what `docker build` targets when no --target is passed, so the
 # API app keeps building correctly with its build-stage field left blank.
 FROM base AS api

@@ -1,6 +1,16 @@
+"""Renders which of the 16.7M hex codes fall within a delta-E threshold.
+
+Not a test despite its old name (app/services/compute_test.py) -- it was being
+picked up by pytest's *_test.py glob.
+"""
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
 import numpy as np
 from scipy.spatial import cKDTree
-from compute import ALL_LAB, KEY_ITEM_LABS, DYE_LABS
+
+from app.services.compute import ALL_LAB, KEY_ITEM_LABS, DYE_LABS
 
 def generate_color_map(threshold: float = 5.0) -> np.ndarray:
     """Returns boolean mask where True = delta E < threshold to any key item."""

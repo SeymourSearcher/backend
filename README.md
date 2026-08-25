@@ -1,5 +1,9 @@
 # backend
-Plan
+
+Tests: `scripts/run_tests.sh` (add `--docker` to run against the pinned
+dependency set, which is the run that counts). See `tests/README.md`.
+
+## Plan
 
 users upload export files
 log each upload

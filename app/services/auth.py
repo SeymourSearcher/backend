@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 import httpx
 from jose import jwt
 
+from app.clock import utcnow
 from app.config import get_settings
 
 settings = get_settings()
@@ -39,7 +40,7 @@ async def get_discord_user(access_token: str) -> dict:
 
 
 def create_jwt(discord_id: int) -> str:
-    expire = datetime.utcnow() + timedelta(minutes=settings.jwt_expire_minutes)
+    expire = utcnow() + timedelta(minutes=settings.jwt_expire_minutes)
     payload = {"sub": str(discord_id), "exp": expire}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 

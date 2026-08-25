@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from pathlib import Path
 
@@ -20,8 +20,7 @@ class Settings(BaseSettings):
     
     frontend_url: str = "http://localhost:3000"
 
-    class Config:
-        env_file = BASE_DIR / ".env"
+    model_config = SettingsConfigDict(env_file=BASE_DIR / ".env")
 
 
 @lru_cache

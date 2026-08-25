@@ -1,0 +1,99 @@
+"""Fixtures backed by a throwaway MySQL.
+
+MySQL rather than SQLite on purpose: the code under test leans on things SQLite
+either lacks or silently ignores -- ROW_NUMBER() over a filtered subquery,
+SELECT ... FOR UPDATE row locks, and ON DUPLICATE KEY UPDATE. A SQLite run would
+pass while proving nothing about production.
+
+Run with:
+    docker run -d --name seymour-testdb -e MYSQL_ROOT_PASSWORD=test \
+        -e MYSQL_DATABASE=seymour_test -p 3312:3306 mysql:8.4
+    TEST_DATABASE_URL=mysql+aiomysql://root:test@127.0.0.1:3312/seymour_test pytest
+"""
+import os
+
+import httpx
+import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+
+pytestmark = pytest.mark.integration
+
+from app.database import Base  # noqa: E402
+from app.dependencies import get_db  # noqa: E402
+from app.main import app  # noqa: E402
+from app.models import User  # noqa: E402
+
+
+@pytest.fixture(scope="session")
+async def engine():
+    engine = create_async_engine(TEST_DATABASE_URL, pool_recycle=3600, pool_size=5, max_overflow=5)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def sessionmaker(engine):
+    return async_sessionmaker(engine, expire_on_commit=False)
+
+
+@pytest.fixture
+async def clean_db(engine):
+    """A fresh schema per test, so ordering and leftovers can never matter."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+
+
+@pytest.fixture
+async def db(clean_db, sessionmaker):
+    async with sessionmaker() as session:
+        yield session
+
+
+@pytest.fixture
+async def user(db):
+    row = User(discord_id=1, username="tester", avatar_hash=None)
+    db.add(row)
+    await db.commit()
+    return row
+
+
+@pytest.fixture
+async def other_user(db):
+    row = User(discord_id=2, username="other", avatar_hash=None)
+    db.add(row)
+    await db.commit()
+    return row
+
+
+@pytest.fixture
+async def client(clean_db, sessionmaker):
+    """Anonymous client. Override get_current_user via `as_user` for authed calls."""
+    async def override_db():
+        async with sessionmaker() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_db
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def as_user(sessionmaker):
+    """Authenticate the shared client as a given user for the rest of the test."""
+    from app.dependencies import get_current_user
+
+    def _login(row):
+        user_id = row.id
+
+        async def override():
+            async with sessionmaker() as session:
+                return await session.get(User, user_id)
+
+        app.dependency_overrides[get_current_user] = override
+
+    return _login
