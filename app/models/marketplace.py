@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import Integer, String, ForeignKey, SmallInteger, Float, DateTime, Index, Enum, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.clock import utcnow
 from app.database import Base
 
 
@@ -30,7 +31,7 @@ class Tier(PyEnum):
 
 
 def default_expiry():
-    return datetime.utcnow() + timedelta(hours=48)
+    return utcnow() + timedelta(hours=48)
 
 
 class BuyOrder(Base):
@@ -45,7 +46,7 @@ class BuyOrder(Base):
     price: Mapped[int] = mapped_column(Integer)
     order_type: Mapped[OrderType] = mapped_column(Enum(OrderType))
     status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), default=OrderStatus.ACTIVE)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, default=default_expiry)
 
     user: Mapped["User"] = relationship(back_populates="buy_orders")
@@ -97,7 +98,7 @@ class SellOrder(Base):
     seymour_id: Mapped[int] = mapped_column(Integer, ForeignKey("seymours.id", ondelete="CASCADE"), index=True)
     price: Mapped[int] = mapped_column(Integer)
     status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), default=OrderStatus.ACTIVE)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, default=default_expiry)
 
     user: Mapped["User"] = relationship(back_populates="sell_orders")

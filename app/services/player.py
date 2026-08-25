@@ -1,18 +1,20 @@
 """UUID -> Minecraft username lookups, cached in the players table.
 
-Upstream calls share one pooled client. A page of auctions can need ~100
-lookups; opening a client per call meant ~100 fresh TLS handshakes to the same
-host, which measured 2.5x slower than a shared pool capped at 10 connections.
-The pool cap is also what bounds concurrency -- excess requests queue on it.
+Upstream calls share one pooled client. A page of auctions can need ~200
+lookups; opening a client per call meant a fresh TLS handshake for each, and
+unbounded concurrency that the upstream API degrades under. The pool cap is
+what bounds concurrency here -- excess requests queue on it. See
+MAX_CONNECTIONS for the measured tradeoff.
 """
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.clock import utcnow as _utcnow
 from app.models import Player
 
 # Usernames change rarely, so a long TTL keeps cold pages off the upstream API.
@@ -25,16 +27,15 @@ MAX_FAILURES_TRACKED = 10_000
 
 API_URL = "https://api.ashcon.app/mojang/v2/user/{}"
 REQUEST_TIMEOUT = 5.0
-MAX_CONNECTIONS = 10
+
+# Calibrated against the live API with a page-sized batch of 60 lookups:
+# unbounded 7.6s (2 timeouts), 10 -> 1.37s, 25 -> 0.81s, 50 -> 5.13s (upstream
+# degrades). Re-measure before changing; more concurrency is not better here.
+MAX_CONNECTIONS = 25
 
 _client: httpx.AsyncClient | None = None
 _client_lock = asyncio.Lock()
 _failures: dict[str, datetime] = {}
-
-
-def _utcnow() -> datetime:
-    """Naive UTC, matching the naive DateTime column on Player."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 async def get_client() -> httpx.AsyncClient:

@@ -1,10 +1,11 @@
-from datetime import datetime
+from datetime import timedelta
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, cast, String, asc, desc
+from sqlalchemy import select, func, and_, or_, cast, String, asc, desc
 from sqlalchemy.orm import selectinload
 
+from app.clock import utcnow
 from app.dependencies import get_db, get_current_user
 from app.models import User, Seymour, BuyOrder, BuyOrderSetCriteria, BuyOrderHexCriteria, SellOrder, OrderType, OrderStatus, Tier
 from app.schemas.marketplace import (
@@ -33,10 +34,29 @@ async def get_sets_pieces():
     return get_all_sets_pieces()
 
 
-def expire_if_needed(order: BuyOrder) -> BuyOrder:
-    if order.status == OrderStatus.ACTIVE and order.expires_at < datetime.utcnow():
-        order.status = OrderStatus.EXPIRED
-    return order
+def is_expired(order) -> bool:
+    return order.status == OrderStatus.ACTIVE and order.expires_at < utcnow()
+
+
+def status_filter(model, status: OrderStatus | None):
+    """Expiry is derived, so an ACTIVE/EXPIRED filter must account for it in SQL."""
+    now = utcnow()
+    if status is None:
+        return None
+    if status == OrderStatus.ACTIVE:
+        return and_(model.status == OrderStatus.ACTIVE, model.expires_at > now)
+    if status == OrderStatus.EXPIRED:
+        return or_(
+            model.status == OrderStatus.EXPIRED,
+            and_(model.status == OrderStatus.ACTIVE, model.expires_at <= now),
+        )
+    return model.status == status
+
+
+def with_derived_status(response, order):
+    if is_expired(order):
+        return response.model_copy(update={"status": OrderStatus.EXPIRED})
+    return response
 
 
 @router.post("/orders", response_model=BuyOrderResponse)
@@ -109,7 +129,7 @@ async def list_orders(
             selectinload(BuyOrder.user),
         )
         .where(BuyOrder.status == OrderStatus.ACTIVE)
-        .where(BuyOrder.expires_at > datetime.utcnow())
+        .where(BuyOrder.expires_at > utcnow())
     )
 
     if order_type:
@@ -148,13 +168,7 @@ async def list_orders(
     result = await db.execute(query)
     orders = list(result.scalars().all())
 
-    for order in orders:
-        expire_if_needed(order)
-
-    await db.commit()
-    active_orders = [o for o in orders if o.status == OrderStatus.ACTIVE]
-
-    return BuyOrderListResponse(orders=active_orders, total=total or 0)
+    return BuyOrderListResponse(orders=orders, total=total or 0)
 
 
 @router.get("/orders/mine", response_model=BuyOrderListResponse)
@@ -169,12 +183,18 @@ async def list_my_orders(
 ):
     query = (
         select(BuyOrder)
-        .options(selectinload(BuyOrder.set_criteria), selectinload(BuyOrder.hex_criteria))
+        .options(
+            selectinload(BuyOrder.set_criteria),
+            selectinload(BuyOrder.hex_criteria),
+            # Serialising BuyOrderResponse touches .user; without this the lazy
+            # load raises MissingGreenlet on the async session.
+            selectinload(BuyOrder.user),
+        )
         .where(BuyOrder.user_id == user.id)
     )
 
     if status:
-        query = query.where(BuyOrder.status == status)
+        query = query.where(status_filter(BuyOrder, status))
 
     count_query = select(func.count()).select_from(query.subquery())
     total = await db.scalar(count_query)
@@ -185,12 +205,10 @@ async def list_my_orders(
     result = await db.execute(query)
     orders = list(result.scalars().all())
 
-    for order in orders:
-        expire_if_needed(order)
-
-    await db.commit()
-
-    return BuyOrderListResponse(orders=orders, total=total or 0)
+    return BuyOrderListResponse(
+        orders=[with_derived_status(BuyOrderResponse.model_validate(o), o) for o in orders],
+        total=total or 0,
+    )
 
 
 @router.get("/orders/matching/{seymour_id}", response_model=BuyOrderListResponse)
@@ -210,19 +228,19 @@ async def find_matching_orders(
 
     result = await db.execute(
         select(BuyOrder)
-        .options(selectinload(BuyOrder.set_criteria), selectinload(BuyOrder.hex_criteria))
+        .options(
+            selectinload(BuyOrder.set_criteria),
+            selectinload(BuyOrder.hex_criteria),
+            selectinload(BuyOrder.user),
+        )
         .where(BuyOrder.status == OrderStatus.ACTIVE)
-        .where(BuyOrder.expires_at > datetime.utcnow())
+        .where(BuyOrder.expires_at > utcnow())
         .where(BuyOrder.user_id != user.id)
     )
     orders = list(result.scalars().all())
 
     matching = []
     for order in orders:
-        expire_if_needed(order)
-        if order.status != OrderStatus.ACTIVE:
-            continue
-
         if order.order_type == OrderType.SET_PIECE and order.set_criteria:
             if seymour_matches_set_order(
                 seymour.hex_color,
@@ -243,8 +261,6 @@ async def find_matching_orders(
                 order.hex_criteria.piece_type,
             ):
                 matching.append(order)
-
-    await db.commit()
 
     matching.sort(key=lambda o: o.price, reverse=True)
     total = len(matching)
@@ -278,17 +294,13 @@ async def list_fillable_orders(
             selectinload(BuyOrder.user),
         )
         .where(BuyOrder.status == OrderStatus.ACTIVE)
-        .where(BuyOrder.expires_at > datetime.utcnow())
+        .where(BuyOrder.expires_at > utcnow())
         .where(BuyOrder.user_id != user.id)
     )
     orders = list(orders_result.scalars().all())
 
     fillable = []
     for order in orders:
-        expire_if_needed(order)
-        if order.status != OrderStatus.ACTIVE:
-            continue
-
         matching_seymours = []
         for seymour in user_seymours:
             is_match = False
@@ -315,8 +327,6 @@ async def list_fillable_orders(
         if matching_seymours:
             fillable.append({"order": order, "matching_seymours": matching_seymours})
 
-    await db.commit()
-
     reverse = sort_order == "desc"
     if sort_by == "price":
         fillable.sort(key=lambda x: x["order"].price, reverse=reverse)
@@ -324,12 +334,6 @@ async def list_fillable_orders(
         fillable.sort(key=lambda x: x["order"].expires_at, reverse=reverse)
 
     return fillable[skip:skip + limit]
-
-
-def expire_sell_order_if_needed(order: SellOrder) -> SellOrder:
-    if order.status == OrderStatus.ACTIVE and order.expires_at < datetime.utcnow():
-        order.status = OrderStatus.EXPIRED
-    return order
 
 
 def build_sell_order_response(order: SellOrder) -> dict:
@@ -362,8 +366,13 @@ async def create_sell_orders(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
+    # Lock the Seymour rows for the transaction: the "already listed" check below
+    # is otherwise a check-then-insert that two concurrent requests both pass,
+    # double-listing the same Seymour.
     seymours_result = await db.execute(
-        select(Seymour).where(Seymour.id.in_(data.seymour_ids), Seymour.user_id == user.id)
+        select(Seymour)
+        .where(Seymour.id.in_(data.seymour_ids), Seymour.user_id == user.id)
+        .with_for_update()
     )
     owned_seymours = {s.id: s for s in seymours_result.scalars().all()}
 
@@ -375,14 +384,13 @@ async def create_sell_orders(
         select(SellOrder.seymour_id)
         .where(SellOrder.seymour_id.in_(data.seymour_ids))
         .where(SellOrder.status == OrderStatus.ACTIVE)
-        .where(SellOrder.expires_at > datetime.utcnow())
+        .where(SellOrder.expires_at > utcnow())
     )
     already_listed = set(active_listings_result.scalars().all())
     if already_listed:
         raise HTTPException(400, f"Seymours already listed: {list(already_listed)}")
 
-    from datetime import timedelta
-    expires_at = datetime.utcnow() + timedelta(hours=data.expires_hours)
+    expires_at = utcnow() + timedelta(hours=data.expires_hours)
 
     created_orders = []
     for seymour_id in data.seymour_ids:
@@ -419,15 +427,19 @@ async def list_sell_orders(
         select(SellOrder)
         .options(selectinload(SellOrder.seymour), selectinload(SellOrder.user))
         .where(SellOrder.status == OrderStatus.ACTIVE)
-        .where(SellOrder.expires_at > datetime.utcnow())
+        .where(SellOrder.expires_at > utcnow())
     )
 
+    joined_seymour = False
     if piece_type is not None:
-        query = query.join(Seymour).where(Seymour.item_name == piece_type)
+        query = query.join(Seymour)
+        joined_seymour = True
+        query = query.where(Seymour.item_name == piece_type)
 
     if hex_color:
-        if "Seymour" not in str(query):
+        if not joined_seymour:
             query = query.join(Seymour)
+            joined_seymour = True
         query = query.where(Seymour.hex_color == hex_color.upper())
 
     if min_price is not None:
@@ -439,29 +451,24 @@ async def list_sell_orders(
     count_query = select(func.count()).select_from(query.subquery())
     total = await db.scalar(count_query)
 
-    if sort_by != "delta_e":
+    if sort_by == "delta_e":
+        # delta_e is derived per Seymour rather than stored, so this sort cannot
+        # be pushed into SQL and has to page in Python over the full result set.
+        orders = list((await db.execute(query)).scalars().all())
+        responses = [build_sell_order_response(o) for o in orders]
+        responses.sort(
+            key=lambda x: x["seymour"]["match"]["delta_e"] if x["seymour"]["match"] else float("inf"),
+            reverse=sort_order == "desc",
+        )
+        responses = responses[skip:skip + limit]
+    else:
         sort_col = SellOrder.price if sort_by == "price" else SellOrder.expires_at
         order_func = desc if sort_order == "desc" else asc
-        query = query.order_by(order_func(sort_col))
+        query = query.order_by(order_func(sort_col)).offset(skip).limit(limit)
+        orders = list((await db.execute(query)).scalars().all())
+        responses = [build_sell_order_response(o) for o in orders]
 
-    result = await db.execute(query)
-    orders = list(result.scalars().all())
-
-    for order in orders:
-        expire_sell_order_if_needed(order)
-
-    await db.commit()
-    active_orders = [build_sell_order_response(o) for o in orders if o.status == OrderStatus.ACTIVE]
-
-    if sort_by == "delta_e":
-        reverse = sort_order == "desc"
-        active_orders.sort(
-            key=lambda x: x["seymour"]["match"]["delta_e"] if x["seymour"]["match"] else float("inf"),
-            reverse=reverse
-        )
-
-    paginated = active_orders[skip:skip + limit]
-    return SellOrderListResponse(orders=paginated, total=total or 0)
+    return SellOrderListResponse(orders=responses, total=total or 0)
 
 
 @router.get("/orders/sell/mine", response_model=SellOrderListResponse)
@@ -481,7 +488,7 @@ async def list_my_sell_orders(
     )
 
     if status:
-        query = query.where(SellOrder.status == status)
+        query = query.where(status_filter(SellOrder, status))
 
     count_query = select(func.count()).select_from(query.subquery())
     total = await db.scalar(count_query)
@@ -493,12 +500,14 @@ async def list_my_sell_orders(
     result = await db.execute(query)
     orders = list(result.scalars().all())
 
+    responses = []
     for order in orders:
-        expire_sell_order_if_needed(order)
+        response = build_sell_order_response(order)
+        if is_expired(order):
+            response["status"] = OrderStatus.EXPIRED
+        responses.append(response)
 
-    await db.commit()
-
-    return SellOrderListResponse(orders=[build_sell_order_response(o) for o in orders], total=total or 0)
+    return SellOrderListResponse(orders=responses, total=total or 0)
 
 
 @router.delete("/orders/sell/{order_id}")
@@ -530,17 +539,18 @@ async def get_order(
 ):
     result = await db.execute(
         select(BuyOrder)
-        .options(selectinload(BuyOrder.set_criteria), selectinload(BuyOrder.hex_criteria))
+        .options(
+            selectinload(BuyOrder.set_criteria),
+            selectinload(BuyOrder.hex_criteria),
+            selectinload(BuyOrder.user),
+        )
         .where(BuyOrder.id == order_id)
     )
     order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
 
-    expire_if_needed(order)
-    await db.commit()
-
-    return order
+    return with_derived_status(BuyOrderResponse.model_validate(order), order)
 
 
 @router.delete("/orders/{order_id}")

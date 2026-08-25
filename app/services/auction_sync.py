@@ -1,10 +1,11 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from sqlalchemy.dialects.mysql import insert
 
+from app.clock import utcnow
 from app.database import async_session
 from app.models import ActiveAuction, EndedAuction, Bid
 from app.services.matching import match_columns
@@ -29,7 +30,7 @@ async def upsert_active_auctions_batch(db: AsyncSession, auctions: list[SeymourA
     if not auctions:
         return
 
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     matches = match_columns([a.hex_color for a in auctions])
     values = [
         {
@@ -163,7 +164,7 @@ async def sync_ended_auctions(db: AsyncSession, active_ids: set[str]):
         )
     
     # Remove active auctions not updated in the last STALE_THRESHOLD_MINUTES
-    stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=STALE_THRESHOLD_MINUTES)
+    stale_cutoff = utcnow() - timedelta(minutes=STALE_THRESHOLD_MINUTES)
     await db.execute(
         delete(ActiveAuction).where(ActiveAuction.last_updated < stale_cutoff)
     )

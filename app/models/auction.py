@@ -1,12 +1,9 @@
 from sqlalchemy import String, BigInteger, Boolean, Float, SmallInteger, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from datetime import datetime, timezone
+from datetime import datetime
 
+from app.clock import utcnow
 from app.database import Base
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 class ActiveAuction(Base):
@@ -33,7 +30,7 @@ class ActiveAuction(Base):
     item_uuid: Mapped[str] = mapped_column(String(36))
     hex_color: Mapped[str] = mapped_column(String(6))
     piece: Mapped[int] = mapped_column(SmallInteger)
-    last_updated: Mapped[datetime] = mapped_column(default=_utcnow)
+    last_updated: Mapped[datetime] = mapped_column(default=utcnow)
 
     # Nullable so the migration can add them without a blocking backfill; see
     # scripts/backfill_auction_matches.py.
