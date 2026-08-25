@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from app.models.marketplace import OrderType, OrderStatus, HexMatchType, Tier
 from app.pieces import Piece
+from app.schemas.common import MatchBrief, PublicUser, SeymourBrief
 
 HEX6 = re.compile(r"^[0-9A-F]{6}$")
 
@@ -70,17 +71,8 @@ class HexCriteriaResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class OrderUserResponse(BaseModel):
-    discord_id: str
-    username: str
-    avatar_hash: str | None = None
-
-    model_config = ConfigDict(from_attributes=True)
-
-    @field_validator("discord_id", mode="before")
-    @classmethod
-    def coerce_discord_id(cls, v):
-        return str(v)
+class OrderUserResponse(PublicUser):
+    pass
 
 
 class BuyOrderResponse(BaseModel):
@@ -103,12 +95,8 @@ class BuyOrderListResponse(BaseModel):
     total: int
 
 
-class MatchingSeymourResponse(BaseModel):
-    id: int
-    item_name: Piece
-    hex_color: str
-
-    model_config = ConfigDict(from_attributes=True)
+class MatchingSeymourResponse(SeymourBrief):
+    pass
 
 
 class FillableOrderResponse(BaseModel):
@@ -145,16 +133,11 @@ class SellOrderCreate(BaseModel):
         return v
 
 
-class SellOrderMatchResponse(BaseModel):
-    target_name: str
-    target_hex: str
-    delta_e: float
+class SellOrderMatchResponse(MatchBrief):
+    pass
 
 
-class SellOrderSeymourResponse(BaseModel):
-    id: int
-    item_name: Piece
-    hex_color: str
+class SellOrderSeymourResponse(SeymourBrief):
     match: SellOrderMatchResponse | None = None
 
 

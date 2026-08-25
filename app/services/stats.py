@@ -6,7 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.compute import find_matching_seymours, find_sets
 from app.services.compute import KEY_ITEM_HEXES, HEX_WORDS
 from app.services.compute import seymour_converter
-from app.services.cache import get_cached_global_stats, set_cached_global_stats
+from app.services.cache import GLOBAL_STATS, RANKINGS
+from app.services.matching import get_tier
+
+# Must stay in step with StatsResponse; test_stats.py pins them together.
+STAT_KEYS = (
+    "stars", "t1", "t2", "t3", "words", "dupes",
+    "total_sets", "dyed_sets", "total_seymours",
+)
+
 
 def count_dupes(seymour_list):
     counts = Counter(seymour_list)
@@ -47,17 +55,8 @@ def count_words(seymour_list):
     return sum(1 for hex_code, _ in seymour_list if _contains_word(hex_code.upper()))
 
 def get_tier_data(matches):
-    t1 = 0
-    t2 = 0
-    t3 = 0
-    for match in matches:
-        if match[2] < 2:
-            t1 += 1
-        elif match[2] < 5:
-            t2 += 1
-        elif match[2] < 10:
-            t3 += 1
-    return t1, t2, t3
+    counts = Counter(get_tier(match[2]) for match in matches)
+    return counts["t1"], counts["t2"], counts["t3"]
 
 def get_stats(seymour_list):
     """Compute all stats in parallel using ThreadPoolExecutor."""
@@ -95,30 +94,19 @@ def get_stats(seymour_list):
 
 
 def sum_rankings_stats(rankings: list[dict]) -> dict:
-    """Compute global stats by summing all user rankings data."""
-    return {
-        "stars": sum(r["stars"] for r in rankings),
-        "t1": sum(r["t1"] for r in rankings),
-        "t2": sum(r["t2"] for r in rankings),
-        "t3": sum(r["t3"] for r in rankings),
-        "words": sum(r["words"] for r in rankings),
-        "dupes": sum(r["dupes"] for r in rankings),
-        "total_sets": sum(r["total_sets"] for r in rankings),
-        "dyed_sets": sum(r["dyed_sets"] for r in rankings),
-        "total_seymours": sum(r["total_seymours"] for r in rankings),
-    }
+    """Global stats are just the per-user stats added up."""
+    return {key: sum(r[key] for r in rankings) for key in STAT_KEYS}
 
 
 async def get_global_stats(redis: Redis, db: AsyncSession) -> dict:
-    cached = await get_cached_global_stats(redis)
+    cached = await GLOBAL_STATS.get(redis)
     if cached:
         return cached
 
-    from app.services.cache import get_cached_rankings
-    cached_rankings = await get_cached_rankings(redis)
+    cached_rankings = await RANKINGS.get(redis)
     if cached_rankings:
         stats = sum_rankings_stats(cached_rankings)
-        await set_cached_global_stats(redis, stats)
+        await GLOBAL_STATS.set(redis, stats)
         return stats
 
     # Deferred: app.services.rankings imports this module at import time.

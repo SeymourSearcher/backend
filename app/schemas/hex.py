@@ -1,12 +1,10 @@
 from pydantic import BaseModel
 
 from app.pieces import Piece
+from app.schemas.common import PublicUser
 
 
-class HexUserResponse(BaseModel):
-    discord_id: str
-    username: str
-    avatar_hash: str | None = None
+class HexUserResponse(PublicUser):
     delta_e: float
 
 

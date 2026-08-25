@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db, get_current_user
 from app.models import User, OrderStatus, OrderType, Tier
-from app.pieces import Piece
+from app.pieces import Piece, parse_pieces
 from app.schemas.common import DetailResponse
 from app.schemas.marketplace import (
     BuyOrderCreate,
@@ -52,9 +52,7 @@ async def list_orders(
     filters = BuyOrderFilters(
         order_type=order_type,
         set_name=set_name,
-        piece_types=[int(p.strip()) for p in piece_types.split(",") if p.strip().isdigit()]
-        if piece_types
-        else None,
+        piece_types=parse_pieces(piece_types),
         tier=tier,
     )
     orders, total = await buy_orders.list_active(db, filters, sort_by, sort_order, skip, limit)

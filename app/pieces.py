@@ -23,3 +23,16 @@ ITEM_IDS = ["VELVET_TOP_HAT", "CASHMERE_JACKET", "SATIN_TROUSERS", "OXFORD_SHOES
 SLOT_TO_PIECE = {name: Piece(i) for i, name in enumerate(SLOT_NAMES)}
 ITEM_NAME_TO_PIECE = {name: Piece(i) for i, name in enumerate(ITEM_NAMES)}
 ITEM_ID_TO_PIECE = {name: Piece(i) for i, name in enumerate(ITEM_IDS)}
+
+
+def parse_pieces(pieces: str | None) -> list[int] | None:
+    """Parse the comma-separated piece list used by query strings.
+
+    Deliberately not narrowed to Piece: an out-of-range index has to survive
+    into the query so it matches nothing, rather than dropping the filter and
+    silently widening the result set.
+    """
+    if not pieces:
+        return None
+    parsed = [int(p) for p in pieces.split(",") if p.strip().isdigit()]
+    return parsed or None

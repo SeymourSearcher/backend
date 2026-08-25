@@ -43,16 +43,39 @@ def compute_abs_diff(hex1: str | None, hex2: str | None) -> int:
     return abs(r1 - r2) + abs(g1 - g2) + abs(b1 - b2)
 
 
-def get_name_for_hex(target_hex: str | None) -> str | None:
+def key_item_for_hex(target_hex: str | None) -> str | None:
+    """The catalog item sitting exactly on this hex, if any."""
     if not target_hex:
         return None
     item_names = HEX_TO_ITEMS.get(target_hex, [])
-    if item_names:
-        return ITEM_TO_SET.get(item_names[0], item_names[0])
+    return item_names[0] if item_names else None
+
+
+def set_name_for_hex(target_hex: str | None) -> str | None:
+    """The set that item belongs to, falling back to the item's own name."""
+    item_name = key_item_for_hex(target_hex)
+    if item_name is None:
+        return None
+    return ITEM_TO_SET.get(item_name, item_name)
+
+
+def dye_label_for_hex(target_hex: str | None, *, with_stage: bool) -> str | None:
+    """Callers disagree on the stage suffix, so it stays their choice."""
+    if not target_hex:
+        return None
     dye_info = HEX_TO_DYE_STAGE.get(target_hex, [])
-    if dye_info:
-        return dye_info[0][0]
-    return None
+    if not dye_info:
+        return None
+    name, stage = dye_info[0]
+    return f"{name} Stage {stage}" if with_stage else name
+
+
+def get_name_for_hex(target_hex: str | None) -> str | None:
+    return set_name_for_hex(target_hex) or dye_label_for_hex(target_hex, with_stage=False)
+
+
+def list_set_names() -> list[str]:
+    return sorted(SETS.keys())
 
 
 def get_set_target_hexes(set_name: str) -> list[str]:

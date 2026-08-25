@@ -3,11 +3,11 @@ from sqlalchemy.dialects import mysql
 
 from app.models import ActiveAuction, EndedAuction
 from app.schemas.auction import EndedAuctionResponse
+from app.pieces import parse_pieces
 from app.services.auction_queries import (
     AuctionFilters,
     build_where,
     match_columns_for,
-    parse_pieces,
     serialize,
     sort_column,
 )

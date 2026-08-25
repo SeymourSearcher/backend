@@ -9,20 +9,18 @@ from app.errors import InvalidInputError, NotFoundError
 from app.models import Seymour, User
 from app.repositories.seymour_repo import SeymourRepository
 from app.services.cache import (
-    get_cached_available_filters,
-    get_cached_custom_sets,
-    get_cached_seymour_results,
-    get_cached_user_seymours,
-    invalidate_global_stats,
-    invalidate_hex_info,
-    invalidate_rankings,
+    CUSTOM_SETS,
+    GLOBAL_STATS,
+    HEX_INFO,
+    RANKINGS,
+    SEYMOUR_FILTERS,
+    SEYMOUR_RESULTS,
+    USER_SEYMOURS,
+    custom_sets_hash,
     invalidate_user_seymours,
-    set_cached_available_filters,
-    set_cached_custom_sets,
-    set_cached_seymour_results,
-    set_cached_user_seymours,
 )
-from app.services.compute import FADE_DYES, SETS, find_custom_sets
+from app.services.compute import FADE_DYES, find_custom_sets
+from app.services.matching import list_set_names
 from app.services.parser import parse_seymour_file
 from app.services.seymour_filters import (
     compute_available_filters,
@@ -55,15 +53,15 @@ async def read_upload(file: UploadFile) -> str:
 
 
 async def get_user_seymours(db: AsyncSession, redis: Redis, user_id: int) -> list[Seymour]:
-    cached = await get_cached_user_seymours(redis, user_id)
+    cached = await USER_SEYMOURS.get(redis, user_id)
     if cached is not None:
         return [Seymour(**s) for s in cached]
 
     seymours = await SeymourRepository(db).list_for_user(user_id)
-    await set_cached_user_seymours(redis, user_id, [
+    await USER_SEYMOURS.set(redis, [
         {"id": s.id, "item_name": s.item_name, "hex_color": s.hex_color, "user_id": s.user_id}
         for s in seymours
-    ])
+    ], user_id)
     return seymours
 
 
@@ -76,15 +74,15 @@ async def available_filters(
     include_dyes: bool,
 ) -> list[str]:
     if filter_type == "sets":
-        return sorted(SETS.keys())
+        return list_set_names()
     if filter_type == "dyes":
         return sorted(FADE_DYES.keys())
 
     if not user:
         return []
 
-    cached = await get_cached_available_filters(
-        redis, user.id, filter_type, incomplete_only, include_dyes
+    cached = await SEYMOUR_FILTERS.get(
+        redis, user.id, "filters", filter_type, incomplete_only, include_dyes
     )
     if cached is not None:
         return cached
@@ -93,8 +91,8 @@ async def available_filters(
     filters = compute_available_filters(
         [(s.hex_color, s.item_name) for s in seymours], filter_type, incomplete_only, include_dyes
     )
-    await set_cached_available_filters(
-        redis, user.id, filter_type, incomplete_only, include_dyes, filters
+    await SEYMOUR_FILTERS.set(
+        redis, filters, user.id, "filters", filter_type, incomplete_only, include_dyes
     )
     return filters
 
@@ -120,8 +118,8 @@ async def list_for_user(
     skip: int,
     limit: int,
 ) -> list[dict]:
-    cached = await get_cached_seymour_results(
-        redis, user.id, filter_type, sub_filter, incomplete_only, include_dyes
+    cached = await SEYMOUR_RESULTS.get(
+        redis, user.id, filter_type, sub_filter or "none", incomplete_only, include_dyes
     )
     if cached is not None:
         results = sort_results(cached, sort, filter_type) if sort else cached
@@ -132,16 +130,16 @@ async def list_for_user(
     custom_sets_data = None
     if filter_type == "custom":
         seymour_list = [(s.hex_color, s.item_name) for s in seymours]
-        custom_sets_data = await get_cached_custom_sets(redis, seymour_list)
+        custom_sets_data = await CUSTOM_SETS.get(redis, custom_sets_hash(seymour_list))
         if custom_sets_data is None:
             custom_sets_data = find_custom_sets(seymour_list, max_avg_delta_e=1.0)
-            await set_cached_custom_sets(redis, seymour_list, custom_sets_data)
+            await CUSTOM_SETS.set(redis, custom_sets_data, custom_sets_hash(seymour_list))
 
     filtered = filter_with_matches(
         seymours, filter_type, sub_filter, incomplete_only, include_dyes, custom_sets_data
     )
-    await set_cached_seymour_results(
-        redis, user.id, filter_type, sub_filter, incomplete_only, include_dyes, filtered
+    await SEYMOUR_RESULTS.set(
+        redis, filtered, user.id, filter_type, sub_filter or "none", incomplete_only, include_dyes
     )
 
     results = sort_results(filtered, sort, filter_type) if sort else filtered
@@ -168,10 +166,10 @@ async def replace_all(
     user.last_uploaded = utcnow()
     await db.commit()
 
-    await invalidate_global_stats(redis)
+    await GLOBAL_STATS.invalidate(redis)
     await invalidate_user_seymours(redis, user.id)
-    await invalidate_rankings(redis)
-    await invalidate_hex_info(redis)
+    await RANKINGS.invalidate(redis)
+    await HEX_INFO.invalidate_all(redis)
 
     return len(parsed), skipped
 
@@ -192,7 +190,7 @@ async def delete_one(db: AsyncSession, redis: Redis, user: User, seymour_id: int
     await seymours.remove(seymour)
     await db.commit()
 
-    await invalidate_global_stats(redis)
+    await GLOBAL_STATS.invalidate(redis)
     await invalidate_user_seymours(redis, user.id)
 
 
@@ -200,5 +198,5 @@ async def delete_all(db: AsyncSession, redis: Redis, user: User) -> None:
     await SeymourRepository(db).delete_for_user(user.id)
     await db.commit()
 
-    await invalidate_global_stats(redis)
+    await GLOBAL_STATS.invalidate(redis)
     await invalidate_user_seymours(redis, user.id)

@@ -35,13 +35,6 @@ class AuctionFilters:
     include_dyes: bool = True
 
 
-def parse_pieces(pieces: str | None) -> list[int] | None:
-    if not pieces:
-        return None
-    parsed = [int(p) for p in pieces.split(",") if p.strip().isdigit()]
-    return parsed or None
-
-
 def match_columns_for(model, include_dyes: bool):
     """Returns (target_hex, delta_e, tier) columns for the requested target set."""
     if include_dyes:

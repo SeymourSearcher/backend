@@ -6,20 +6,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import InvalidInputError
 from app.repositories.seymour_repo import SeymourRepository
-from app.services.cache import get_cached_hex_info, set_cached_hex_info
+from app.services.cache import HEX_INFO
 from app.services.compute import (
     HEX_NEIGHBORHOODS_ALL,
     HEX_NEIGHBORHOODS_KEYS,
-    HEX_TO_DYE_STAGE,
-    HEX_TO_ITEMS,
     ITEM_TO_INFO,
-    ITEM_TO_SET,
     delta_e,
     find_top_hex_matches,
     get_lab,
 )
 from app.pieces import Piece
-from app.services.matching import get_tier
+from app.services.matching import (
+    dye_label_for_hex,
+    get_tier,
+    key_item_for_hex,
+    set_name_for_hex,
+)
 
 HEX_PATTERN = re.compile(r'^[0-9A-Fa-f]{6}$')
 
@@ -32,23 +34,22 @@ def validate_hex(hex_code: str) -> str:
 
 
 def build_match_info(target_hex: str, de: float, include_dyes: bool = False) -> dict | None:
-    item_names = HEX_TO_ITEMS.get(target_hex, [])
-    if item_names:
-        item_name = item_names[0]
-        info = ITEM_TO_INFO.get(item_name, {})
+    item_name = key_item_for_hex(target_hex)
+    if item_name is not None:
         return {
-            "target_name": ITEM_TO_SET.get(item_name, item_name),
+            "target_name": set_name_for_hex(target_hex),
             "target_hex": target_hex,
             "delta_e": round(de, 2),
-            "pieces": info.get("pieces", []),
+            "pieces": ITEM_TO_INFO.get(item_name, {}).get("pieces", []),
         }
 
-    if include_dyes and target_hex in HEX_TO_DYE_STAGE:
-        dye_name, stage = HEX_TO_DYE_STAGE[target_hex][0]
+    dye_label = dye_label_for_hex(target_hex, with_stage=True) if include_dyes else None
+    if dye_label is not None:
         return {
-            "target_name": f"{dye_name} Stage {stage}",
+            "target_name": dye_label,
             "target_hex": target_hex,
             "delta_e": round(de, 2),
+            # A dye colour is available on every piece.
             "pieces": list(Piece),
         }
 
@@ -107,7 +108,7 @@ async def get_hex_info(
 ) -> dict:
     hex_code = validate_hex(hex_code)
 
-    cached = await get_cached_hex_info(redis, hex_code, include_dyes)
+    cached = await HEX_INFO.get(redis, hex_code, include_dyes)
     if cached is not None:
         return cached
 
@@ -126,5 +127,5 @@ async def get_hex_info(
         match["users_by_tier"] = users_by_tier
 
     info = {"hex_code": hex_code, "top_matches": top_matches}
-    await set_cached_hex_info(redis, hex_code, include_dyes, info)
+    await HEX_INFO.set(redis, info, hex_code, include_dyes)
     return info

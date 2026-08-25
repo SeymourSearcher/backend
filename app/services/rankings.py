@@ -7,11 +7,9 @@ from app.models import User
 from app.repositories.seymour_repo import SeymourRepository
 from app.repositories.user_repo import UserRepository
 from app.services.cache import (
-    get_cached_rankings,
-    get_cached_user_stats,
-    set_cached_global_stats,
-    set_cached_rankings,
-    set_cached_user_stats,
+    GLOBAL_STATS,
+    RANKINGS,
+    USER_STATS,
 )
 from app.services.stats import get_stats, sum_rankings_stats
 
@@ -34,13 +32,13 @@ def _compute_rankings(user_data_list: list[tuple[dict, list]]) -> list[dict]:
 
 
 async def user_stats(db: AsyncSession, redis: Redis, user: User) -> dict:
-    cached = await get_cached_user_stats(redis, user.id)
+    cached = await USER_STATS.get(redis, user.id)
     if cached:
         return cached
 
     seymours = await SeymourRepository(db).list_for_user(user.id)
     stats = get_stats([(s.hex_color, s.item_name) for s in seymours])
-    await set_cached_user_stats(redis, user.id, stats)
+    await USER_STATS.set(redis, stats, user.id)
 
     return stats
 
@@ -59,16 +57,16 @@ async def compute_and_cache_rankings(db: AsyncSession, redis: Redis) -> list[dic
 
     rankings = await asyncio.to_thread(_compute_rankings, user_data_list)
 
-    await set_cached_rankings(redis, rankings)
+    await RANKINGS.set(redis, rankings)
 
     # Also update global stats from rankings
-    await set_cached_global_stats(redis, sum_rankings_stats(rankings))
+    await GLOBAL_STATS.set(redis, sum_rankings_stats(rankings))
 
     return rankings
 
 
 async def rankings(db: AsyncSession, redis: Redis) -> list[dict]:
-    cached = await get_cached_rankings(redis)
+    cached = await RANKINGS.get(redis)
     if cached:
         return cached
     return await compute_and_cache_rankings(db, redis)

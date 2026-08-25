@@ -1,8 +1,8 @@
 from app.clock import utcnow
 from app.models import OrderStatus, SellOrder
 from app.pieces import Piece
-from app.services.compute import delta_e, get_lab, SETS, ITEM_TO_INFO, find_matching_seymours, KEY_ITEM_HEXES, HEX_TO_ITEMS, ITEM_TO_SET
-from app.services.matching import TIER_THRESHOLDS
+from app.services.compute import delta_e, get_lab, SETS, ITEM_TO_INFO, find_matching_seymours, KEY_ITEM_HEXES
+from app.services.matching import TIER_THRESHOLDS, set_name_for_hex
 
 def get_set_available_pieces(set_name: str) -> list[Piece]:
     available = set()
@@ -124,12 +124,7 @@ def get_seymour_best_match(hex_color: str, piece_type: int) -> dict | None:
     target_hex = match[1][0]
     de = match[2]
     
-    item_names = HEX_TO_ITEMS.get(target_hex, [])
-    if item_names:
-        item_name = item_names[0]
-        set_name = ITEM_TO_SET.get(item_name, item_name)
-    else:
-        set_name = f"#{target_hex}"
+    set_name = set_name_for_hex(target_hex) or f"#{target_hex}"
     
     return {
         "target_name": set_name,

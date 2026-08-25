@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict
 
 from app.pieces import Piece
+from app.schemas.common import MatchBrief, SeymourBrief
 from app.schemas.fields import HexColor
 
 
@@ -21,17 +22,11 @@ class SeymourResponse(SeymourBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-class MatchInfo(BaseModel):
-    target_name: str
-    target_hex: str
-    delta_e: float
+class MatchInfo(MatchBrief):
     missing: list[Piece] | None = None
 
 
-class SeymourWithMatchResponse(BaseModel):
-    id: int
-    item_name: Piece
-    hex_color: str
+class SeymourWithMatchResponse(SeymourBrief):
     match: MatchInfo | None = None
 
 

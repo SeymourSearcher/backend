@@ -99,3 +99,25 @@ def test_match_columns_all_is_never_worse_than_keys():
 
 def test_get_set_target_hexes_unknown_set_is_empty():
     assert get_set_target_hexes("Not A Real Set") == []
+
+
+def test_stats_tier_counts_agree_with_get_tier():
+    """get_tier_data used to hardcode < 2 / < 5 / < 10, a silent third copy of
+    TIER_THRESHOLDS -- which matching's docstring says cannot be changed without
+    a backfill. Pins the two together across every boundary."""
+    from app.services.stats import get_tier_data
+
+    values = [0.0, 1.999, 2.0, 4.999, 5.0, 9.999, 10.0, 50.0]
+    values += [i * 0.05 for i in range(220)]
+    matches = [(None, None, v) for v in values]
+
+    expected = tuple(
+        sum(1 for v in values if get_tier(v) == tier) for tier in ("t1", "t2", "t3")
+    )
+    assert get_tier_data(matches) == expected
+
+
+def test_stats_tier_counts_ignore_values_outside_every_tier():
+    from app.services.stats import get_tier_data
+
+    assert get_tier_data([(None, None, 10.0), (None, None, 999.0)]) == (0, 0, 0)

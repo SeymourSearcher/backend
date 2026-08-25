@@ -9,10 +9,7 @@ from typing import Optional
 from app.models import Seymour
 from app.services.compute import (
     FADE_DYES,
-    HEX_TO_DYE_STAGE,
-    HEX_TO_ITEMS,
     ITEM_TO_INFO,
-    ITEM_TO_SET,
     KEY_ITEM_HEXES,
     SETS,
     find_armor_sets,
@@ -21,7 +18,12 @@ from app.services.compute import (
     find_incomplete_dye_sets,
     find_matching_seymours,
 )
-from app.services.matching import TIER_THRESHOLDS
+from app.services.matching import (
+    TIER_THRESHOLDS,
+    dye_label_for_hex,
+    list_set_names,
+    set_name_for_hex,
+)
 from app.services.stats import is_star, _contains_word
 
 def _build_result(s: Seymour, match: Optional[dict] = None) -> dict:
@@ -57,14 +59,10 @@ def _get_matches(
         if tier and not _is_in_tier(de, tier):
             continue
 
-        item_names = HEX_TO_ITEMS.get(target_hex, [])
-        if item_names:
-            item_name = item_names[0]
-            set_name = ITEM_TO_SET.get(item_name, item_name)
-        elif include_dyes and target_hex in HEX_TO_DYE_STAGE:
-            dye_info = HEX_TO_DYE_STAGE[target_hex][0]
-            set_name = f"{dye_info[0]} Stage {dye_info[1]}"
-        else:
+        set_name = set_name_for_hex(target_hex)
+        if set_name is None and include_dyes:
+            set_name = dye_label_for_hex(target_hex, with_stage=True)
+        if set_name is None:
             set_name = f"#{target_hex}"
 
         if sub_filter_set and set_name not in sub_filter_set:
@@ -229,7 +227,7 @@ def compute_available_filters(
     seymour_list: list[tuple], filter_type: str, incomplete_only: bool, include_dyes: bool = False
 ) -> list[str]:
     if filter_type == "sets":
-        return sorted(SETS.keys())
+        return list_set_names()
 
     if filter_type == "dyes":
         return sorted(FADE_DYES.keys())
