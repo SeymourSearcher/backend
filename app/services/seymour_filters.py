@@ -16,10 +16,11 @@ from app.services.compute import (
     ITEM_TO_SET,
     KEY_ITEM_HEXES,
     SETS,
+    find_armor_sets,
+    find_fade_dye_sets,
     find_incomplete_armor_sets,
     find_incomplete_dye_sets,
     find_matching_seymours,
-    find_sets,
 )
 from app.services.matching import TIER_THRESHOLDS
 from app.services.stats import is_star, _contains_word
@@ -116,8 +117,7 @@ def _armor_set_results(
                     }))
         return results
 
-    armor_sets, _ = find_sets(seymour_list)
-    for set_name, pieces in armor_sets:
+    for set_name, pieces in find_armor_sets(seymour_list):
         if sub_filter_set and set_name not in sub_filter_set:
             continue
         for item_name, piece_idx, user_hex, de in pieces:
@@ -157,8 +157,7 @@ def _dye_set_results(
                     }))
         return results
 
-    _, dye_sets = find_sets(seymour_list)
-    for dye_name, stage, pieces in dye_sets:
+    for dye_name, stage, pieces in find_fade_dye_sets(seymour_list):
         if sub_filter_set and dye_name not in sub_filter_set:
             continue
         target_hex = FADE_DYES.get(dye_name, {}).get(stage, "")
