@@ -139,17 +139,20 @@ def test_score_quads_values():
 
 def test_expand_repeats_parents_and_flattens_neighbours():
     parents = np.array([10, 20, 30], dtype=np.int32)
-    left, right = _expand([parents], np.array([[1, 2], [], [3]], dtype=object))
+    (left, right), counts = _expand([parents], np.array([[1, 2], [], [3]], dtype=object))
 
     assert left.tolist() == [10, 10, 30]
     assert right.tolist() == [1, 2, 3]
+    assert counts.tolist() == [2, 0, 1]
 
 
-def greedy(rows, threshold):
-    """rows are (score, i0, i1, i2, i3); returns the selected rows in order."""
+def greedy(rows, threshold, counts=None):
+    """rows are (score, i0, i1, i2, i3), grouped into triples by `counts`."""
     scores = np.array([r[0] for r in rows], dtype=np.float32)
     indices = np.array([r[1:] for r in rows], dtype=np.int32).reshape(len(rows), 4)
-    return [rows[p] for p in _greedy_select(scores, indices, threshold)]
+    if counts is None:
+        counts = np.ones(len(rows), dtype=np.intp)
+    return [rows[p] for p in _greedy_select(scores, indices, np.asarray(counts), threshold)]
 
 
 def test_greedy_select_takes_lowest_scores_first_and_keeps_slots_disjoint():
@@ -175,9 +178,70 @@ def test_greedy_select_breaks_ties_by_insertion_order():
     assert greedy(ties, 5.0) == [(1.0, 0, 0, 0, 0), (1.0, 1, 1, 1, 1)]
 
 
+def test_greedy_select_falls_back_within_a_triple_when_its_best_slot3_is_taken():
+    """The refill path. Dropping a triple on its first collision loses set #2."""
+    rows = [
+        (0.1, 0, 0, 0, 0),   # triple A, wins and consumes slot-3 piece 0
+        (0.2, 1, 1, 1, 0),   # triple B's best, now blocked on slot-3 piece 0
+        (0.3, 1, 1, 1, 1),   # triple B's fallback, still free
+    ]
+    assert greedy(rows, 1.0, counts=[1, 2]) == [(0.1, 0, 0, 0, 0), (0.3, 1, 1, 1, 1)]
+
+
+def test_greedy_select_drops_a_triple_once_its_fixed_pieces_are_used():
+    """No refill can help: slots 0-2 are consumed for good by the first emission."""
+    rows = [
+        (0.1, 0, 0, 0, 0),
+        (0.2, 0, 0, 0, 1),   # same triple as the winner -- dead, not refilled
+    ]
+    assert greedy(rows, 1.0, counts=[2]) == [(0.1, 0, 0, 0, 0)]
+
+
+def reference_greedy(scores, indices, threshold):
+    """The obvious implementation: sort every candidate, take the first still-free one.
+
+    _greedy_select replaced this with a per-triple heap for speed; it has to agree.
+    """
+    order = np.argsort(scores, kind="stable")
+    used = [set(), set(), set(), set()]
+    selected = []
+    for position in order[scores[order] < threshold].tolist():
+        row = indices[position].tolist()
+        if any(row[slot] in used[slot] for slot in range(4)):
+            continue
+        for slot in range(4):
+            used[slot].add(row[slot])
+        selected.append(position)
+    return selected
+
+
+@pytest.mark.parametrize("seed", range(25))
+def test_greedy_select_agrees_with_sorting_every_candidate(seed):
+    """Random triples with random fan-out, including collisions and dead triples."""
+    rng = np.random.default_rng(seed)
+    counts = rng.integers(0, 6, size=60)
+
+    triples = rng.integers(0, 6, size=(len(counts), 3)).astype(np.int32)
+    indices = np.concatenate([
+        np.column_stack([
+            np.repeat(triples, counts, axis=0),
+            rng.integers(0, 8, size=int(counts.sum())).astype(np.int32),
+        ])
+    ]).reshape(-1, 4)
+    # Coarse, so equal scores are common and tie-breaking actually gets exercised.
+    scores = (rng.integers(1, 12, size=len(indices)) / 10).astype(np.float32)
+
+    assert _greedy_select(scores, indices, counts, 1.0).tolist() == reference_greedy(
+        scores, indices, 1.0
+    )
+
+
 def test_greedy_select_empty_input():
     empty = _greedy_select(
-        np.empty(0, dtype=np.float32), np.empty((0, 4), dtype=np.int32), 1.0
+        np.empty(0, dtype=np.float32),
+        np.empty((0, 4), dtype=np.int32),
+        np.empty(0, dtype=np.intp),
+        1.0,
     )
     assert len(empty) == 0
 

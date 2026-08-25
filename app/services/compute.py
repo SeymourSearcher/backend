@@ -3,6 +3,7 @@ import json
 import time
 import os
 from collections import Counter
+from heapq import heapify, heappop, heappush
 from itertools import chain
 from scipy.spatial import cKDTree
 
@@ -546,34 +547,88 @@ def _expand(columns, neighbours):
     child = np.fromiter(
         chain.from_iterable(neighbours), dtype=np.int32, count=int(counts.sum())
     )
-    return [np.repeat(column, counts) for column in columns] + [child]
+    return [np.repeat(column, counts) for column in columns] + [child], counts
 
 
-def _greedy_select(scores, indices, threshold):
+def _segment_argmin(values, starts, lengths):
+    """Position of the first minimum within each segment. Segments must be non-empty."""
+    at_min = np.flatnonzero(
+        values == np.repeat(np.minimum.reduceat(values, starts), lengths)
+    )
+    segments = np.repeat(np.arange(len(starts)), lengths)[at_min]
+    return at_min[np.flatnonzero(np.concatenate(([True], segments[1:] != segments[:-1])))]
+
+
+def _greedy_select(scores, indices, counts, threshold):
     """Positions of the lowest-scoring candidates whose four piece indices are unused.
 
-    Takes parallel arrays rather than a list of tuples: at ~1.1M candidates for a
-    10k inventory, materialising tuples cost more than the selection itself.
-    Greedy disjoint selection is inherently sequential so the loop stays, but
-    tolist() makes each step plain-Python ints instead of numpy scalar extraction.
+    Best-first over triples rather than a sort of every candidate. Emitting a set
+    consumes its first three piece indices, so a triple yields at most one set and
+    only its best still-free candidate need ever be live: ~64k heap entries against
+    ~1.4M sorted rows for a 10k inventory. `counts` gives each triple's candidate
+    run, contiguous because _expand preserves lexicographic order.
+
+    Same sequence as sorting everything: the heap orders by (score, position), so
+    equal scores keep insertion order. Getting that wrong silently selects a
+    different, equally scoring set.
     """
-    if len(scores) == 0:
+    if not scores.size:
         return np.empty(0, dtype=np.intp)
 
-    # Stable: equal scores must keep insertion order or a different, equally
-    # scoring set gets picked. np.argsort defaults to quicksort, which does not.
-    order = np.argsort(scores, kind="stable")
-    order = order[scores[order] < threshold]
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    nonempty = counts > 0
+    starts, lengths = starts[nonempty], counts[nonempty]
 
-    used0, used1, used2, used3 = (
-        bytearray(int(size) + 1) for size in indices.max(axis=0)
-    )
+    used = [bytearray(int(size) + 1) for size in indices.max(axis=0)]
+    by_score = {}
+    cursors = {}
+
+    def next_free(triple):
+        """That triple's cheapest remaining candidate whose slot-3 piece is unused."""
+        order = by_score.get(triple)
+        if order is None:
+            start = int(starts[triple])
+            stop = start + int(lengths[triple])
+            order = by_score[triple] = (
+                np.argsort(scores[start:stop], kind="stable") + start
+            ).tolist()
+            cursors[triple] = 0
+
+        for cursor in range(cursors[triple], len(order)):
+            position = order[cursor]
+            if scores[position] >= threshold:
+                break
+            if not used[3][indices[position, 3]]:
+                cursors[triple] = cursor + 1
+                return position
+
+        cursors[triple] = len(order)
+        return None
+
+    heap = [
+        (float(scores[position]), position, triple)
+        for triple, position in enumerate(
+            _segment_argmin(scores, starts, lengths).tolist()
+        )
+        if scores[position] < threshold
+    ]
+    heapify(heap)
 
     selected = []
-    for position, (i0, i1, i2, i3) in zip(order.tolist(), indices[order].tolist()):
-        if used0[i0] or used1[i1] or used2[i2] or used3[i3]:
+    while heap:
+        _, position, triple = heappop(heap)
+        i0, i1, i2, i3 = indices[position].tolist()
+
+        if used[0][i0] or used[1][i1] or used[2][i2]:
             continue
-        used0[i0] = used1[i1] = used2[i2] = used3[i3] = 1
+        if used[3][i3]:
+            refill = next_free(triple)
+            if refill is not None:
+                heappush(heap, (float(scores[refill]), refill, triple))
+            continue
+
+        for slot, index in enumerate((i0, i1, i2, i3)):
+            used[slot][index] = 1
         selected.append(position)
 
     return np.array(selected, dtype=np.intp)
@@ -601,14 +656,14 @@ def find_custom_sets(seymour_list, max_avg_delta_e=1.0):
     # Expanded a level at a time as flat index columns rather than by nested
     # loop: the loop made ~64k tiny tree queries and ~64k tiny score calls on a
     # 10k inventory, where a handful of batched ones do the same work.
-    p0, p1 = _expand(
+    (p0, p1), _ = _expand(
         [np.arange(len(labs0), dtype=np.int32)],
         trees[1].query_ball_point(labs0, radius),
     )
     if not p0.size:
         return []
 
-    t0, t1, t2 = _expand(
+    (t0, t1, t2), _ = _expand(
         [p0, p1],
         trees[2].query_ball_point((labs0[p0] + labs1[p1]) * 0.5, radius),
     )
@@ -617,30 +672,32 @@ def find_custom_sets(seymour_list, max_avg_delta_e=1.0):
 
     # Only the last level is chunked -- it is where the fan-out lands: a 10k
     # inventory turns 7k pairs into 64k triples but 1.4M quadruples.
+    # Kept unfiltered: _greedy_select segments these by triple using `counts`, so
+    # dropping over-threshold rows here would break the run offsets. It applies
+    # the threshold itself.
     score_blocks = []
     index_blocks = []
+    count_blocks = []
     for start in range(0, t0.size, _TRIPLE_CHUNK):
         chunk = [column[start:start + _TRIPLE_CHUNK] for column in (t0, t1, t2)]
         centroids = (labs0[chunk[0]] + labs1[chunk[1]] + labs2[chunk[2]]) / 3
 
-        columns = _expand(chunk, trees[3].query_ball_point(centroids, radius))
+        columns, counts = _expand(chunk, trees[3].query_ball_point(centroids, radius))
         if not columns[3].size:
             continue
 
-        avg_des = _score_quads(piece_labs, columns)
-        kept = np.where(avg_des < max_avg_delta_e)[0]
-        if not kept.size:
-            continue
-
-        score_blocks.append(avg_des[kept])
-        index_blocks.append(np.stack([column[kept] for column in columns], axis=1))
+        score_blocks.append(_score_quads(piece_labs, columns))
+        index_blocks.append(np.stack(columns, axis=1))
+        count_blocks.append(counts)
 
     if not score_blocks:
         return []
 
     scores = np.concatenate(score_blocks)
     candidate_indices = np.concatenate(index_blocks)
-    selected = _greedy_select(scores, candidate_indices, max_avg_delta_e)
+    selected = _greedy_select(
+        scores, candidate_indices, np.concatenate(count_blocks), max_avg_delta_e
+    )
 
     results = []
     for position in selected:
