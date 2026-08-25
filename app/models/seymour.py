@@ -1,15 +1,7 @@
-from enum import Enum as PyEnum
 from sqlalchemy import Integer, String, ForeignKey, SmallInteger, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
-
-
-class ItemName(PyEnum):
-    VELVET_TOP_HAT = 0
-    CASHMERE_JACKET = 1
-    SATIN_TROUSERS = 2
-    OXFORD_SHOES = 3
 
 
 class Seymour(Base):

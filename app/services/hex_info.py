@@ -17,9 +17,8 @@ from app.services.compute import (
     find_top_hex_matches,
     get_lab,
 )
+from app.pieces import Piece
 from app.services.matching import get_tier
-
-PIECE_NAMES = ["helmet", "chestplate", "leggings", "boots"]
 
 HEX_PATTERN = re.compile(r'^[0-9A-Fa-f]{6}$')
 
@@ -37,19 +36,19 @@ def build_match_info(target_hex: str, de: float, include_dyes: bool = False) -> 
         item_name = item_names[0]
         info = ITEM_TO_INFO.get(item_name, {})
         return {
-            "item_name": ITEM_TO_SET.get(item_name, item_name),
+            "target_name": ITEM_TO_SET.get(item_name, item_name),
             "target_hex": target_hex,
             "delta_e": round(de, 2),
-            "pieces": [PIECE_NAMES[p] for p in info.get("pieces", [])],
+            "pieces": info.get("pieces", []),
         }
 
     if include_dyes and target_hex in HEX_TO_DYE_STAGE:
         dye_name, stage = HEX_TO_DYE_STAGE[target_hex][0]
         return {
-            "item_name": f"{dye_name} ({stage})",
+            "target_name": f"{dye_name} Stage {stage}",
             "target_hex": target_hex,
             "delta_e": round(de, 2),
-            "pieces": PIECE_NAMES,
+            "pieces": list(Piece),
         }
 
     return None

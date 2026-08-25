@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.pieces import Piece
 from app.services.compute import find_armor_sets, find_fade_dye_sets, find_sets
 from app.services.seymour_filters import filter_with_matches
 
@@ -29,13 +30,13 @@ SEYMOURS = [
 ]
 
 FARM_SUIT_ROWS = [
-    {"id": 0, "item_name": "Velvet Top Hat", "hex_color": "FFFF00",
+    {"id": 0, "item_name": 0, "hex_color": "FFFF00",
      "match": {"target_name": "Farm Suit", "target_hex": "FFFF00", "delta_e": 0.0}},
-    {"id": 1, "item_name": "Cashmere Jacket", "hex_color": "FFFF00",
+    {"id": 1, "item_name": 1, "hex_color": "FFFF00",
      "match": {"target_name": "Farm Suit", "target_hex": "FFFF00", "delta_e": 0.0}},
-    {"id": 2, "item_name": "Satin Trousers", "hex_color": "FFFF00",
+    {"id": 2, "item_name": 2, "hex_color": "FFFF00",
      "match": {"target_name": "Farm Suit", "target_hex": "FFFF00", "delta_e": 0.0}},
-    {"id": 3, "item_name": "Oxford Shoes", "hex_color": "FFFF00",
+    {"id": 3, "item_name": 3, "hex_color": "FFFF00",
      "match": {"target_name": "Farm Suit", "target_hex": "FFFF00", "delta_e": 0.0}},
 ]
 
@@ -68,7 +69,7 @@ def test_dyes_filter_output_is_unchanged():
         "Warden Stage 14", "Warden Stage 15", "Warden Stage 16", "Warden Stage 17",
     ]
     assert rows[0] == {
-        "id": 4, "item_name": "Velvet Top Hat", "hex_color": "048F95",
+        "id": 4, "item_name": 0, "hex_color": "048F95",
         "match": {"target_name": "Aurora Stage 1", "target_hex": "048F95", "delta_e": 0.0},
     }
     # Only the exact-match stage scores zero; the rest are near misses.
@@ -88,9 +89,9 @@ def test_sets_incomplete_only_reports_owned_pieces_and_what_is_missing():
 
     assert target_names(rows) == ["Farm Armor", "Eleanor's Set"]
     assert rows[0] == {
-        "id": 8, "item_name": "Velvet Top Hat", "hex_color": "FFD700",
+        "id": 8, "item_name": 0, "hex_color": "FFD700",
         "match": {"target_name": "Farm Armor", "target_hex": "FFD700", "delta_e": 0.0,
-                  "missing": ["Satin Trousers", "Oxford Shoes"]},
+                  "missing": [Piece.LEGGINGS, Piece.BOOTS]},
     }
     # The complete Farm Suit must not show up in an incomplete-only listing.
     assert all(r["hex_color"] == "FFD700" for r in rows)
@@ -102,7 +103,7 @@ def test_dyes_incomplete_only_reports_owned_pieces_and_what_is_missing():
     assert rows
     assert all(r["hex_color"] == "FFD700" for r in rows)
     assert all(
-        r["match"]["missing"] == ["Satin Trousers", "Oxford Shoes"] for r in rows
+        r["match"]["missing"] == [Piece.LEGGINGS, Piece.BOOTS] for r in rows
     )
     assert target_names(rows)[:3] == [
         "Sunflower Stage 6", "Sunflower Stage 7", "Sunflower Stage 8"

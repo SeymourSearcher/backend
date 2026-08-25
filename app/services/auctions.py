@@ -6,21 +6,9 @@ import io
 from dataclasses import dataclass
 import nbtlib
 
+from app.pieces import ITEM_ID_TO_PIECE, ITEM_NAMES
+
 BASE_URL = "https://api.hypixel.net/v2/skyblock"
-
-SEYMOUR_ITEMS = {
-    "VELVET_TOP_HAT": 0,
-    "CASHMERE_JACKET": 1,
-    "SATIN_TROUSERS": 2,
-    "OXFORD_SHOES": 3,
-}
-
-SEYMOUR_NAMES = {
-    "Velvet Top Hat",
-    "Cashmere Jacket",
-    "Satin Trousers",
-    "Oxford Shoes",
-}
 
 
 @dataclass
@@ -128,14 +116,14 @@ def parse_bids(raw_bids: list[dict]) -> list[AuctionBid]:
 
 def parse_active_auction(auction: dict) -> SeymourAuction | None:
     item_name = auction.get("item_name", "")
-    if not any(name in item_name for name in SEYMOUR_NAMES):
+    if not any(name in item_name for name in ITEM_NAMES):
         return None
     item_bytes = auction.get("item_bytes")
     if not item_bytes:
         return None
-    
+
     item_id, item_uuid, hex_color = extract_nbt_data(item_bytes)
-    if item_id not in SEYMOUR_ITEMS or not hex_color:
+    if item_id not in ITEM_ID_TO_PIECE or not hex_color:
         return None
     
     raw_bids = auction.get("bids", [])
@@ -151,7 +139,7 @@ def parse_active_auction(auction: dict) -> SeymourAuction | None:
         end_time=auction.get("end"),
         item_uuid=auction.get("item_uuid") or item_uuid or "",
         hex_color=hex_color,
-        piece=SEYMOUR_ITEMS[item_id],
+        piece=ITEM_ID_TO_PIECE[item_id],
         bids=parse_bids(raw_bids) if not is_bin else None,
     )
 
@@ -162,9 +150,9 @@ def parse_ended_auction(auction: dict) -> SeymourEndedAuction | None:
         return None
     
     item_id, item_uuid, hex_color = extract_nbt_data(item_bytes)
-    if item_id not in SEYMOUR_ITEMS or not hex_color:
+    if item_id not in ITEM_ID_TO_PIECE or not hex_color:
         return None
-    
+
     return SeymourEndedAuction(
         auction_id=auction.get("auction_id", ""),
         seller=auction.get("seller", ""),
@@ -173,7 +161,7 @@ def parse_ended_auction(auction: dict) -> SeymourEndedAuction | None:
         is_bin=auction.get("bin", False),
         item_uuid=auction.get("item_uuid") or item_uuid or "",
         hex_color=hex_color,
-        piece=SEYMOUR_ITEMS[item_id],
+        piece=ITEM_ID_TO_PIECE[item_id],
         timestamp=auction.get("timestamp", 0),
     )
 

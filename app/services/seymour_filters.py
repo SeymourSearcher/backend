@@ -7,7 +7,6 @@ from collections import Counter
 from typing import Optional
 
 from app.models import Seymour
-from app.schemas.seymour import ITEM_DISPLAY_NAMES
 from app.services.compute import (
     FADE_DYES,
     HEX_TO_DYE_STAGE,
@@ -25,13 +24,10 @@ from app.services.compute import (
 from app.services.matching import TIER_THRESHOLDS
 from app.services.stats import is_star, _contains_word
 
-PIECE_TO_ITEM = ["Velvet Top Hat", "Cashmere Jacket", "Satin Trousers", "Oxford Shoes"]
-
-
 def _build_result(s: Seymour, match: Optional[dict] = None) -> dict:
     return {
         "id": s.id,
-        "item_name": ITEM_DISPLAY_NAMES[s.item_name],
+        "item_name": s.item_name,
         "hex_color": s.hex_color,
         "match": match
     }
@@ -105,7 +101,7 @@ def _armor_set_results(
         for set_name, owned_pieces, missing_pieces in find_incomplete_armor_sets(seymour_list):
             if sub_filter_set and set_name not in sub_filter_set:
                 continue
-            missing_names = [PIECE_TO_ITEM[p[1]] for p in missing_pieces if p[1] >= 0]
+            missing = [p[1] for p in missing_pieces if p[1] >= 0]
             for item_name, piece_idx, user_hex, de in owned_pieces:
                 key = (user_hex, piece_idx)
                 if key in lookup:
@@ -113,7 +109,7 @@ def _armor_set_results(
                         "target_name": set_name,
                         "target_hex": ITEM_TO_INFO.get(item_name, {}).get("hex", user_hex),
                         "delta_e": round(de, 2),
-                        "missing": missing_names
+                        "missing": missing
                     }))
         return results
 
@@ -145,7 +141,7 @@ def _dye_set_results(
             if sub_filter_set and dye_name not in sub_filter_set:
                 continue
             target_hex = FADE_DYES.get(dye_name, {}).get(stage, "")
-            missing_names = [PIECE_TO_ITEM[p[0]] for p in missing_pieces if p[0] >= 0]
+            missing = [p for p in missing_pieces if p >= 0]
             for piece_idx, user_hex, de in owned_pieces:
                 key = (user_hex, piece_idx)
                 if key in lookup:
@@ -153,7 +149,7 @@ def _dye_set_results(
                         "target_name": f"{dye_name} Stage {stage}",
                         "target_hex": target_hex,
                         "delta_e": round(de, 2),
-                        "missing": missing_names
+                        "missing": missing
                     }))
         return results
 

@@ -1,11 +1,7 @@
 import json
 import re
-from app.schemas.seymour import SeymourCreate, ItemName, ITEM_DISPLAY_NAMES
-
-DISPLAY_TO_ITEM = {v: k for k, v in ITEM_DISPLAY_NAMES.items()}
-
-# Map from ENUM_STYLE names to ItemName enum values
-ENUM_TO_ITEM = {item.name: item for item in ItemName}
+from app.pieces import ITEM_ID_TO_PIECE, ITEM_NAME_TO_PIECE
+from app.schemas.seymour import SeymourCreate
 
 # Pattern for quoted format: "uuid" "Item Name" "HexColor" "Match Info"
 QUOTED_LINE_PATTERN = re.compile(r'"([^"]+)"\s+"([^"]+)"\s+"([^"]+)"\s+"([^"]+)"')
@@ -24,11 +20,11 @@ def parse_pipe_format_line(line: str) -> SeymourCreate | None:
     hex_color = parts[1].lstrip("#")
     
     item_name = None
-    for display_name, enum_val in DISPLAY_TO_ITEM.items():
+    for display_name, piece in ITEM_NAME_TO_PIECE.items():
         if item_name_str.endswith(display_name):
-            item_name = enum_val
+            item_name = piece
             break
-    
+
     if item_name is None:
         return None
     
@@ -48,10 +44,10 @@ def parse_quoted_format_line(line: str) -> SeymourCreate | None:
     item_name_str = match.group(2)
     hex_color = match.group(3).lstrip("#")
     
-    item_name = DISPLAY_TO_ITEM.get(item_name_str)
+    item_name = ITEM_NAME_TO_PIECE.get(item_name_str)
     if item_name is None:
         return None
-    
+
     return SeymourCreate(
         item_name=item_name,
         hex_color=hex_color,
@@ -67,7 +63,7 @@ def parse_markdown_format_line(line: str) -> SeymourCreate | None:
     item_name_enum = match.group(1)  # e.g., "VELVET_TOP_HAT"
     hex_color = match.group(2).lstrip("#")
     
-    item_name = ENUM_TO_ITEM.get(item_name_enum)
+    item_name = ITEM_ID_TO_PIECE.get(item_name_enum)
     if item_name is None:
         return None
     
@@ -119,7 +115,7 @@ def parse_json_format(content: str) -> tuple[list[SeymourCreate], int] | None:
             skipped += 1
             continue
         
-        item_name = DISPLAY_TO_ITEM.get(piece_name)
+        item_name = ITEM_NAME_TO_PIECE.get(piece_name)
         if item_name is None:
             skipped += 1
             continue

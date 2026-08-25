@@ -7,6 +7,8 @@ from heapq import heapify, heappop, heappush
 from itertools import chain
 from scipy.spatial import cKDTree
 
+from app.pieces import SLOT_TO_PIECE
+
 def _build_lab_table():
     #Makes mapping of RGB -> LAB
     rgb = np.arange(0x1000000, dtype=np.uint32)
@@ -115,24 +117,32 @@ def _get_piece_tree_and_hexes(key_item_hexes, include_dyes):
 
 def _query_best_only(tree, user_labs, user_hexes, target_hexes, piece, threshold):
     dists, indices = tree.query(user_labs, k=1)
-    results = []
-    for u in range(len(user_hexes)):
-        if dists[u] < threshold:
-            results.append(((user_hexes[u], piece), (target_hexes[indices[u]], piece), float(dists[u])))
-    return results
+    keep = np.flatnonzero(dists < threshold)
+    return [
+        ((user_hexes[u], piece), (target_hexes[t], piece), d)
+        for u, t, d in zip(keep.tolist(), indices[keep].tolist(), dists[keep].tolist())
+    ]
 
 
 def _query_all_matches(tree, user_labs, user_hexes, target_labs, target_hexes, piece, threshold):
-    matches = tree.query_ball_point(user_labs, threshold)
-    results = []
-    for u, target_indices in enumerate(matches):
-        if not target_indices:
-            continue
-        target_indices = np.asarray(target_indices)
-        dists = np.linalg.norm(user_labs[u] - target_labs[target_indices], axis=1)
-        for t, d in zip(target_indices, dists):
-            results.append(((user_hexes[u], piece), (target_hexes[t], piece), float(d)))
-    return results
+    """Every (user, target) pair within threshold, as (user, target, delta_e) triples.
+
+    Flattened rather than looped per user: the loop made one tiny np.linalg.norm
+    call per user seymour, where a single batched one covers the whole piece.
+    _expand keeps the pairs in the same order the loop emitted them.
+    """
+    (users, targets), _ = _expand(
+        [np.arange(len(user_hexes), dtype=np.int32)],
+        tree.query_ball_point(user_labs, threshold),
+    )
+    if not users.size:
+        return []
+
+    dists = _row_norms(user_labs[users] - target_labs[targets])
+    return [
+        ((user_hexes[u], piece), (target_hexes[t], piece), d)
+        for u, t, d in zip(users.tolist(), targets.tolist(), dists.tolist())
+    ]
 
 
 def find_matching_seymours(user_seymours, key_item_hexes, threshold=10.0, best_only=False, include_dyes=False):
@@ -163,8 +173,6 @@ def find_matching_seymours(user_seymours, key_item_hexes, threshold=10.0, best_o
     
     return results
 
-PIECE_MAP = {'helmet': 0, 'chestplate': 1, 'leggings': 2, 'boots': 3}
-
 def _load_item_data():
     with open(os.path.join(os.path.dirname(__file__), '..', 'static', 'data.json'), 'r') as f:
         data = json.load(f)
@@ -183,10 +191,10 @@ def _load_item_data():
     for category in data['categories'].values():
         for item in category:
             name, hex_code, pieces = item['name'], item['hex'], item['pieces']
-            item_to_info[name] = {'hex': hex_code, 'pieces': [PIECE_MAP[p] for p in pieces]}
+            item_to_info[name] = {'hex': hex_code, 'pieces': [SLOT_TO_PIECE[p] for p in pieces]}
             hex_to_items.setdefault(hex_code, []).append(name)
             for p in pieces:
-                key_item_hexes.append((hex_code, PIECE_MAP[p]))
+                key_item_hexes.append((hex_code, SLOT_TO_PIECE[p]))
     
     # Fade dyes: {dye_name: {stage: hex}}
     fade_dyes = {}
@@ -446,12 +454,11 @@ def find_incomplete_armor_sets(seymour_list, threshold=5.0):
                     demand[(user_hex, piece_idx)] += 1
                     owned.append((item_name, piece_idx, user_hex, de))
                 else:
-                    piece_name = ['helmet', 'chestplate', 'leggings', 'boots'][piece_idx]
-                    missing.append((item_name, piece_idx, piece_name))
-        
+                    missing.append((item_name, piece_idx))
+
         has_demand_issue = any(user_counts.get(k, 0) < v for k, v in demand.items())
         if has_demand_issue:
-            missing.append(("duplicate_needed", -1, "duplicate"))
+            missing.append(("duplicate_needed", -1))
         
         if owned and (missing or has_demand_issue):
             incomplete_sets.append((set_name, owned, missing))
@@ -482,12 +489,11 @@ def find_incomplete_dye_sets(seymour_list, threshold=5.0):
                     demand[(user_hex, piece_idx)] += 1
                     owned.append((piece_idx, user_hex, de))
                 else:
-                    piece_name = ['helmet', 'chestplate', 'leggings', 'boots'][piece_idx]
-                    missing.append((piece_idx, piece_name))
-            
+                    missing.append(piece_idx)
+
             has_demand_issue = any(user_counts.get(k, 0) < v for k, v in demand.items())
             if has_demand_issue:
-                missing.append((-1, "duplicate"))
+                missing.append(-1)
             
             if owned and (missing or has_demand_issue):
                 incomplete_dye_sets.append((dye_name, stage, owned, missing))

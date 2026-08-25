@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 
 from app.dependencies import get_db, get_current_user, get_redis, get_optional_user
+from app.pieces import Piece
 from app.schemas import SeymourResponse, UploadResponse, SeymourWithMatchResponse
 from app.services import seymours
 from app.models import User
@@ -11,7 +12,7 @@ from app.models import User
 router = APIRouter()
 
 
-@router.get("/available-filters")
+@router.get("/available-filters", response_model=list[str])
 async def get_available_filters(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -26,7 +27,7 @@ async def get_available_filters(
     )
 
 
-@router.get("/hex-codes")
+@router.get("/hex-codes", response_model=list[str] | list[tuple[str, Piece]])
 async def get_user_hex_codes(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],

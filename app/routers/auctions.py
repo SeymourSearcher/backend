@@ -11,6 +11,7 @@ from app.schemas.auction import (
     EndedAuctionResponse,
     EndedAuctionListResponse,
     AuctionStatsResponse,
+    RecentBidResponse,
 )
 from app.services.auction_queries import (
     AuctionFilters,
@@ -92,7 +93,7 @@ async def list_ended_auctions(
     return EndedAuctionListResponse(auctions=auctions, total=total)
 
 
-@router.get("/recent-bids")
+@router.get("/recent-bids", response_model=list[RecentBidResponse])
 async def list_recent_bids(
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = Query(50, ge=1, le=100),

@@ -1,5 +1,7 @@
 from pydantic import BaseModel, ConfigDict
 
+from app.pieces import Piece
+
 
 class BidResponse(BaseModel):
     bidder_uuid: str
@@ -19,7 +21,7 @@ class ActiveAuctionResponse(BaseModel):
     end_time: int | None
     item_uuid: str
     hex_color: str
-    piece: int
+    piece: Piece
     tier: str | None = None
     delta_e: float = 0.0
     abs_diff: int = 0
@@ -48,7 +50,7 @@ class EndedAuctionResponse(BaseModel):
     is_bin: bool
     item_uuid: str
     hex_color: str
-    piece: int
+    piece: Piece
     timestamp: int
     tier: str | None = None
     delta_e: float = 0.0
@@ -62,6 +64,20 @@ class EndedAuctionResponse(BaseModel):
 class EndedAuctionListResponse(BaseModel):
     auctions: list[EndedAuctionResponse]
     total: int
+
+
+class RecentBidResponse(BaseModel):
+    auction_id: str
+    bidder_uuid: str
+    bidder_name: str | None = None
+    amount: int
+    timestamp: int
+    hex_color: str
+    piece: Piece
+    target_hex: str
+    set_name: str | None = None
+    delta_e: float
+    abs_diff: int
 
 
 class PriceBucket(BaseModel):

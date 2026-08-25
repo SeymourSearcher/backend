@@ -1,11 +1,12 @@
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, field_validator
 from app.models.marketplace import OrderType, OrderStatus, HexMatchType, Tier
+from app.pieces import Piece
 
 
 class SetCriteriaCreate(BaseModel):
     set_name: str
-    piece_types: list[int]
+    piece_types: list[Piece]
     tier: Tier
 
     @field_validator("piece_types")
@@ -13,9 +14,6 @@ class SetCriteriaCreate(BaseModel):
     def validate_piece_types(cls, v):
         if not v:
             raise ValueError("piece_types must not be empty")
-        for pt in v:
-            if pt < 0 or pt > 3:
-                raise ValueError("piece_type values must be 0-3")
         return sorted(set(v))
 
 
@@ -23,7 +21,7 @@ class HexCriteriaCreate(BaseModel):
     match_type: HexMatchType
     hex_value: str
     max_delta_e: float | None = None
-    piece_type: int | None = None
+    piece_type: Piece | None = None
 
     @field_validator("hex_value")
     @classmethod
@@ -31,13 +29,6 @@ class HexCriteriaCreate(BaseModel):
         if len(v) != 6:
             raise ValueError("hex_value must be 6 characters")
         return v.upper()
-
-    @field_validator("piece_type")
-    @classmethod
-    def validate_piece_type(cls, v):
-        if v is not None and (v < 0 or v > 3):
-            raise ValueError("piece_type must be 0-3")
-        return v
 
 
 class BuyOrderCreate(BaseModel):
@@ -56,7 +47,7 @@ class BuyOrderCreate(BaseModel):
 
 class SetCriteriaResponse(BaseModel):
     set_name: str
-    piece_types: list[int]
+    piece_types: list[Piece]
     tier: Tier
 
     model_config = ConfigDict(from_attributes=True)
@@ -66,7 +57,7 @@ class HexCriteriaResponse(BaseModel):
     match_type: HexMatchType
     hex_value: str
     max_delta_e: float | None
-    piece_type: int | None
+    piece_type: Piece | None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -106,7 +97,7 @@ class BuyOrderListResponse(BaseModel):
 
 class MatchingSeymourResponse(BaseModel):
     id: int
-    item_name: int
+    item_name: Piece
     hex_color: str
 
     model_config = ConfigDict(from_attributes=True)
@@ -154,7 +145,7 @@ class SellOrderMatchResponse(BaseModel):
 
 class SellOrderSeymourResponse(BaseModel):
     id: int
-    item_name: int
+    item_name: Piece
     hex_color: str
     match: SellOrderMatchResponse | None = None
 
