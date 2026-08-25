@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
@@ -5,11 +7,19 @@ from fastapi.responses import PlainTextResponse
 from app.config import get_settings
 from app.routers import auth, users, seymours, stats, hex, marketplace, visualization
 from app.routers import auctions as auctions_router
+from app.services.player import close_client
 
 settings = get_settings()
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await close_client()
+
+
 # Auction sync runs in a separate process; see app/worker.py.
-app = FastAPI(title="Seymour Searcher API")
+app = FastAPI(title="Seymour Searcher API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
