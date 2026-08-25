@@ -3,6 +3,7 @@ import json
 import time
 import os
 from collections import Counter
+from itertools import chain
 from scipy.spatial import cKDTree
 
 def _build_lab_table():
@@ -509,31 +510,78 @@ def _get_piece_labs(seymour_list):
     return pieces, piece_labs
 
 
-def _score_candidates_batch(labs_fixed, labs3_sub):
-    n = len(labs3_sub)
-    stacked = np.empty((n, 4, 3), dtype=np.float32)
-    stacked[:, :3, :] = labs_fixed
-    stacked[:, 3, :] = labs3_sub
-    centroids = stacked.mean(axis=1, keepdims=True)
-    return np.sqrt(((stacked - centroids) ** 2).sum(axis=2)).mean(axis=1)
+def _row_norms(diff):
+    return np.sqrt(diff[:, 0] ** 2 + diff[:, 1] ** 2 + diff[:, 2] ** 2)
 
 
-def _greedy_select(candidates, threshold):
-    if not candidates:
-        return []
-    candidates.sort(key=lambda x: x[0])
-    used = [set() for _ in range(4)]
+def _score_quads(piece_labs, columns):
+    """Mean distance-from-centroid for each quadruple, given its four index columns.
+
+    Plain ufuncs over (n,3) arrays rather than an (n,4,3) array plus two
+    ndarray.mean calls -- numpy's per-call dispatch dominates the arithmetic.
+    The summation order is deliberate: these are float32, so reassociating them
+    shifts the last digits and moves ties in _greedy_select. Unrolling per
+    component is slower again, trading array ops for numpy scalar extraction.
+    Measure before changing: scripts/bench_compute.sh.
+    """
+    l0, l1, l2, l3 = (labs[column] for labs, column in zip(piece_labs, columns))
+    centroids = (l0 + l1 + l2 + l3) * 0.25
+    total = _row_norms(l3 - centroids)
+    total += _row_norms(l0 - centroids)
+    total += _row_norms(l1 - centroids)
+    total += _row_norms(l2 - centroids)
+    return total * 0.25
+
+
+def _expand(columns, neighbours):
+    """Cross each parent row with its neighbour list, as flat index columns.
+
+    Neighbour lists arrive sorted, so repeating the parents in place keeps the
+    candidates in lexicographic (i0, i1, i2, i3) order -- which is the insertion
+    order _greedy_select's stable sort breaks ties by.
+    """
+    counts = np.fromiter(
+        (len(n) for n in neighbours), dtype=np.intp, count=len(neighbours)
+    )
+    child = np.fromiter(
+        chain.from_iterable(neighbours), dtype=np.int32, count=int(counts.sum())
+    )
+    return [np.repeat(column, counts) for column in columns] + [child]
+
+
+def _greedy_select(scores, indices, threshold):
+    """Positions of the lowest-scoring candidates whose four piece indices are unused.
+
+    Takes parallel arrays rather than a list of tuples: at ~1.1M candidates for a
+    10k inventory, materialising tuples cost more than the selection itself.
+    Greedy disjoint selection is inherently sequential so the loop stays, but
+    tolist() makes each step plain-Python ints instead of numpy scalar extraction.
+    """
+    if len(scores) == 0:
+        return np.empty(0, dtype=np.intp)
+
+    # Stable: equal scores must keep insertion order or a different, equally
+    # scoring set gets picked. np.argsort defaults to quicksort, which does not.
+    order = np.argsort(scores, kind="stable")
+    order = order[scores[order] < threshold]
+
+    used0, used1, used2, used3 = (
+        bytearray(int(size) + 1) for size in indices.max(axis=0)
+    )
+
     selected = []
-    for c in candidates:
-        if c[0] >= threshold:
-            break
-        indices = c[1:]
-        if any(indices[i] in used[i] for i in range(4)):
+    for position, (i0, i1, i2, i3) in zip(order.tolist(), indices[order].tolist()):
+        if used0[i0] or used1[i1] or used2[i2] or used3[i3]:
             continue
-        for i in range(4):
-            used[i].add(indices[i])
-        selected.append(c)
-    return selected
+        used0[i0] = used1[i1] = used2[i2] = used3[i3] = 1
+        selected.append(position)
+
+    return np.array(selected, dtype=np.intp)
+
+
+# Triples per batch at the final expansion. Sized so one batch stays in the
+# low hundreds of MB at the densities a full inventory produces.
+_TRIPLE_CHUNK = 25_000
 
 
 def find_custom_sets(seymour_list, max_avg_delta_e=1.0):
@@ -550,48 +598,54 @@ def find_custom_sets(seymour_list, max_avg_delta_e=1.0):
     trees = [cKDTree(labs) for labs in piece_labs]
     radius = max_avg_delta_e * 2.0
     
-    all_nearby_1 = trees[1].query_ball_point(labs0, radius)
-    
-    candidates = []
-    for i0, nearby_1 in enumerate(all_nearby_1):
-        if not nearby_1:
+    # Expanded a level at a time as flat index columns rather than by nested
+    # loop: the loop made ~64k tiny tree queries and ~64k tiny score calls on a
+    # 10k inventory, where a handful of batched ones do the same work.
+    p0, p1 = _expand(
+        [np.arange(len(labs0), dtype=np.int32)],
+        trees[1].query_ball_point(labs0, radius),
+    )
+    if not p0.size:
+        return []
+
+    t0, t1, t2 = _expand(
+        [p0, p1],
+        trees[2].query_ball_point((labs0[p0] + labs1[p1]) * 0.5, radius),
+    )
+    if not t0.size:
+        return []
+
+    # Only the last level is chunked -- it is where the fan-out lands: a 10k
+    # inventory turns 7k pairs into 64k triples but 1.4M quadruples.
+    score_blocks = []
+    index_blocks = []
+    for start in range(0, t0.size, _TRIPLE_CHUNK):
+        chunk = [column[start:start + _TRIPLE_CHUNK] for column in (t0, t1, t2)]
+        centroids = (labs0[chunk[0]] + labs1[chunk[1]] + labs2[chunk[2]]) / 3
+
+        columns = _expand(chunk, trees[3].query_ball_point(centroids, radius))
+        if not columns[3].size:
             continue
-        
-        lab0 = labs0[i0]
-        nearby_1 = np.asarray(nearby_1, dtype=np.int32)
-        centroids_01 = (lab0 + labs1[nearby_1]) * 0.5
-        
-        all_nearby_2 = trees[2].query_ball_point(centroids_01, radius)
-        
-        for j1, i1 in enumerate(nearby_1):
-            nearby_2 = all_nearby_2[j1]
-            if not nearby_2:
-                continue
-            
-            lab1 = labs1[i1]
-            nearby_2 = np.asarray(nearby_2, dtype=np.int32)
-            centroids_012 = (lab0 + lab1 + labs2[nearby_2]) / 3
-            
-            all_nearby_3 = trees[3].query_ball_point(centroids_012, radius)
-            
-            for j2, i2 in enumerate(nearby_2):
-                nearby_3 = all_nearby_3[j2]
-                if not nearby_3:
-                    continue
-                
-                nearby_3 = np.asarray(nearby_3, dtype=np.int32)
-                labs_fixed = np.array([lab0, lab1, labs2[i2]], dtype=np.float32)
-                avg_des = _score_candidates_batch(labs_fixed, labs3[nearby_3])
-                
-                valid = avg_des < max_avg_delta_e
-                for idx in np.where(valid)[0]:
-                    candidates.append((avg_des[idx], i0, i1, i2, nearby_3[idx]))
-    
-    selected = _greedy_select(candidates, max_avg_delta_e)
-    
+
+        avg_des = _score_quads(piece_labs, columns)
+        kept = np.where(avg_des < max_avg_delta_e)[0]
+        if not kept.size:
+            continue
+
+        score_blocks.append(avg_des[kept])
+        index_blocks.append(np.stack([column[kept] for column in columns], axis=1))
+
+    if not score_blocks:
+        return []
+
+    scores = np.concatenate(score_blocks)
+    candidate_indices = np.concatenate(index_blocks)
+    selected = _greedy_select(scores, candidate_indices, max_avg_delta_e)
+
     results = []
-    for avg_de, i0, i1, i2, i3 in selected:
-        indices = [i0, i1, i2, i3]
+    for position in selected:
+        avg_de = scores[position]
+        indices = candidate_indices[position].tolist()
         hexes = [pieces[j][indices[j]] for j in range(4)]
         labs = np.array([piece_labs[j][indices[j]] for j in range(4)])
         centroid = labs.mean(axis=0)
