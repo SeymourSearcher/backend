@@ -9,7 +9,8 @@ from sqlalchemy.dialects import mysql
 
 from app.clock import utcnow
 from app.models import BuyOrder, OrderStatus, SellOrder
-from app.routers.marketplace import is_expired, status_filter, with_derived_status
+from app.repositories.marketplace_repo import status_filter
+from app.services.marketplace import is_expired, with_derived_status
 from app.schemas.marketplace import BuyOrderResponse
 
 

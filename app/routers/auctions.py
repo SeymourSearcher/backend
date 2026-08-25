@@ -1,12 +1,9 @@
 from typing import Annotated, Literal
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_db
 from app.models import ActiveAuction, EndedAuction
-from app.models.auction import Bid
 from app.schemas.auction import (
     ActiveAuctionResponse,
     ActiveAuctionDetailResponse,
@@ -17,26 +14,16 @@ from app.schemas.auction import (
 )
 from app.services.auction_queries import (
     AuctionFilters,
+    attach_names,
+    get_auction,
     list_auctions,
     parse_pieces,
-    serialize,
+    recent_bids,
 )
 from app.services.auction_stats import compute_auction_stats
 from app.services.compute import SETS
-from app.services.matching import compute_abs_diff, get_name_for_hex
-from app.services.player import get_player_names
 
 router = APIRouter()
-
-
-async def attach_names(db: AsyncSession, auctions: list, *fields: str) -> None:
-    uuids = {getattr(a, f) for a in auctions for f in fields if getattr(a, f)}
-    if not uuids:
-        return
-    names = await get_player_names(db, list(uuids))
-    for auction in auctions:
-        for field in fields:
-            setattr(auction, f"{field.removesuffix('_uuid')}_name", names.get(getattr(auction, field)))
 
 
 @router.get("/active", response_model=ActiveAuctionListResponse)
@@ -111,36 +98,7 @@ async def list_recent_bids(
     limit: int = Query(50, ge=1, le=100),
     include_dyes: bool = Query(True),
 ):
-    result = await db.execute(
-        select(Bid, ActiveAuction)
-        .join(ActiveAuction, Bid.auction_id == ActiveAuction.auction_id)
-        .order_by(Bid.timestamp.desc())
-        .limit(limit)
-    )
-    rows = result.all()
-
-    names = await get_player_names(db, list({bid.bidder_uuid for bid, _ in rows}))
-
-    bids = []
-    for bid, auction in rows:
-        target_hex = (auction.target_hex_all if include_dyes else auction.target_hex_keys) or ""
-        delta_e = auction.delta_e_all if include_dyes else auction.delta_e_keys
-
-        bids.append({
-            "auction_id": auction.auction_id,
-            "bidder_uuid": bid.bidder_uuid,
-            "bidder_name": names.get(bid.bidder_uuid),
-            "amount": bid.amount,
-            "timestamp": bid.timestamp,
-            "hex_color": auction.hex_color,
-            "piece": auction.piece,
-            "target_hex": target_hex,
-            "set_name": get_name_for_hex(target_hex),
-            "delta_e": round(delta_e, 2) if delta_e is not None else 0.0,
-            "abs_diff": compute_abs_diff(auction.hex_color.upper(), target_hex),
-        })
-
-    return bids
+    return await recent_bids(db, limit, include_dyes)
 
 
 @router.get("/sets", response_model=list[str])
@@ -179,18 +137,11 @@ async def get_active_auction(
     db: Annotated[AsyncSession, Depends(get_db)],
     include_dyes: bool = Query(True),
 ):
-    result = await db.execute(
-        select(ActiveAuction)
-        .options(selectinload(ActiveAuction.bids))
-        .where(ActiveAuction.auction_id == auction_id)
+    auction = await get_auction(
+        db, ActiveAuction, auction_id, ActiveAuctionDetailResponse, include_dyes
     )
-    auction = result.scalar_one_or_none()
-    if not auction:
-        raise HTTPException(status_code=404, detail="Auction not found")
-
-    enriched = serialize(auction, ActiveAuctionDetailResponse, include_dyes)
-    await attach_names(db, [enriched], "seller_uuid")
-    return enriched
+    await attach_names(db, [auction], "seller_uuid")
+    return auction
 
 
 @router.get("/ended/{auction_id}", response_model=EndedAuctionResponse)
@@ -199,13 +150,8 @@ async def get_ended_auction(
     db: Annotated[AsyncSession, Depends(get_db)],
     include_dyes: bool = Query(True),
 ):
-    result = await db.execute(
-        select(EndedAuction).where(EndedAuction.auction_id == auction_id)
+    auction = await get_auction(
+        db, EndedAuction, auction_id, EndedAuctionResponse, include_dyes
     )
-    auction = result.scalar_one_or_none()
-    if not auction:
-        raise HTTPException(status_code=404, detail="Auction not found")
-
-    enriched = serialize(auction, EndedAuctionResponse, include_dyes)
-    await attach_names(db, [enriched], "seller_uuid", "buyer_uuid")
-    return enriched
+    await attach_names(db, [auction], "seller_uuid", "buyer_uuid")
+    return auction

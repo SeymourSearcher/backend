@@ -10,7 +10,9 @@ from typing import Literal
 from sqlalchemy import and_, asc, desc, false, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.errors import NotFoundError
 from app.models import ActiveAuction
+from app.repositories.auction_repo import AuctionRepository
 from app.services.matching import (
     compute_abs_diff,
     get_name_for_hex,
@@ -18,6 +20,7 @@ from app.services.matching import (
     get_tier,
     tier_bounds,
 )
+from app.services.player import get_player_names
 
 
 @dataclass(frozen=True)
@@ -125,3 +128,51 @@ async def list_auctions(
     )
     auctions = [serialize(a, response_cls, filters.include_dyes) for a in result.scalars().all()]
     return auctions, total
+
+
+async def attach_names(db: AsyncSession, auctions: list, *fields: str) -> None:
+    uuids = {getattr(a, f) for a in auctions for f in fields if getattr(a, f)}
+    if not uuids:
+        return
+    names = await get_player_names(db, list(uuids))
+    for auction in auctions:
+        for field in fields:
+            setattr(auction, f"{field.removesuffix('_uuid')}_name", names.get(getattr(auction, field)))
+
+
+async def get_auction(db: AsyncSession, model, auction_id: str, response_cls, include_dyes: bool):
+    repo = AuctionRepository(db)
+    auction = (
+        await repo.get_active(auction_id)
+        if model is ActiveAuction
+        else await repo.get_ended(auction_id)
+    )
+    if not auction:
+        raise NotFoundError("Auction not found")
+    return serialize(auction, response_cls, include_dyes)
+
+
+async def recent_bids(db: AsyncSession, limit: int, include_dyes: bool) -> list[dict]:
+    rows = await AuctionRepository(db).recent_bids(limit)
+    names = await get_player_names(db, list({bid.bidder_uuid for bid, _ in rows}))
+
+    bids = []
+    for bid, auction in rows:
+        target_hex = (auction.target_hex_all if include_dyes else auction.target_hex_keys) or ""
+        delta_e = auction.delta_e_all if include_dyes else auction.delta_e_keys
+
+        bids.append({
+            "auction_id": auction.auction_id,
+            "bidder_uuid": bid.bidder_uuid,
+            "bidder_name": names.get(bid.bidder_uuid),
+            "amount": bid.amount,
+            "timestamp": bid.timestamp,
+            "hex_color": auction.hex_color,
+            "piece": auction.piece,
+            "target_hex": target_hex,
+            "set_name": get_name_for_hex(target_hex),
+            "delta_e": round(delta_e, 2) if delta_e is not None else 0.0,
+            "abs_diff": compute_abs_diff(auction.hex_color.upper(), target_hex),
+        })
+
+    return bids

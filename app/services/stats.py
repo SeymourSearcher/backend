@@ -5,10 +5,7 @@ from redis.asyncio import Redis
 from app.services.compute import find_matching_seymours, find_sets
 from app.services.compute import KEY_ITEM_HEXES, HEX_WORDS
 from app.services.compute import seymour_converter
-from app.services.cache import (
-    get_cached_global_stats, set_cached_global_stats,
-    set_cached_user_stats
-)
+from app.services.cache import get_cached_global_stats, set_cached_global_stats
 
 def count_dupes(seymour_list):
     counts = Counter(seymour_list)
@@ -132,7 +129,8 @@ async def get_global_stats(redis: Redis, db=None, rankings: list[dict] | None = 
     
     # No cached data - recompute rankings if db available
     if db:
-        from app.routers.stats import compute_and_cache_rankings
+        # Deferred: app.services.rankings imports this module at import time.
+        from app.services.rankings import compute_and_cache_rankings
         rankings = await compute_and_cache_rankings(db, redis)
         return sum_rankings_stats(rankings)
     

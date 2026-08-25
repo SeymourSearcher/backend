@@ -10,12 +10,10 @@ import asyncio
 from datetime import datetime, timedelta
 
 import httpx
-from sqlalchemy import select
-from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import utcnow as _utcnow
-from app.models import Player
+from app.repositories.player_repo import PlayerRepository
 
 # Usernames change rarely, so a long TTL keeps cold pages off the upstream API.
 CACHE_DURATION = timedelta(days=30)
@@ -97,8 +95,8 @@ async def get_player_names(db: AsyncSession, uuids: list[str]) -> dict[str, str]
     if not clean_uuids:
         return {}
 
-    result = await db.execute(select(Player).where(Player.uuid.in_(clean_uuids.keys())))
-    players = {p.uuid: p for p in result.scalars().all()}
+    repo = PlayerRepository(db)
+    players = await repo.by_uuid(list(clean_uuids.keys()))
 
     names = {}
     to_fetch = []
@@ -125,12 +123,9 @@ async def get_player_names(db: AsyncSession, uuids: list[str]) -> dict[str, str]
             names[original] = player.username
 
     if new_players:
-        stmt = insert(Player).values(new_players)
-        stmt = stmt.on_duplicate_key_update(
-            username=stmt.inserted.username,
-            last_updated=stmt.inserted.last_updated,
-        )
-        await db.execute(stmt)
+        await repo.upsert(new_players)
+        # Committed here rather than left to the caller: every caller is a read
+        # endpoint that never commits, and this cache is the point of the table.
         await db.commit()
 
     return names

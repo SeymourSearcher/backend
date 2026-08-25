@@ -1,21 +1,12 @@
-import asyncio
-from concurrent.futures import ProcessPoolExecutor
-from functools import partial
 from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 from redis.asyncio import Redis
 
 from app.dependencies import get_db, get_redis, get_current_user
-from app.services.stats import get_global_stats, get_stats, sum_rankings_stats
-from app.services.cache import (
-    get_cached_user_stats, set_cached_user_stats,
-    get_cached_rankings, set_cached_rankings,
-    set_cached_global_stats
-)
-from app.models import User, Seymour
+from app.services.rankings import rankings, user_stats
+from app.services.stats import get_global_stats
+from app.models import User
 
 router = APIRouter()
 
@@ -29,60 +20,12 @@ async def global_stats(
 
 
 @router.get("/me")
-async def user_stats(
+async def get_user_stats(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)]
 ):
-    cached = await get_cached_user_stats(redis, user.id)
-    if cached:
-        return cached
-    
-    result = await db.execute(select(Seymour).where(Seymour.user_id == user.id))
-    seymours = result.scalars().all()
-    seymour_list = [(s.hex_color, s.item_name) for s in seymours]
-    
-    stats = get_stats(seymour_list)
-    await set_cached_user_stats(redis, user.id, stats)
-    
-    return stats
-
-
-def _compute_user_ranking(user_data: dict, seymour_list: list) -> dict:
-    stats = get_stats(seymour_list)
-    return {**user_data, **stats}
-
-
-async def compute_and_cache_rankings(db: AsyncSession, redis: Redis) -> list[dict]:
-    """Compute rankings from database and cache them along with global stats."""
-    result = await db.execute(
-        select(User).options(selectinload(User.seymours)).where(User.seymours.any())
-    )
-    users = result.scalars().all()
-    
-    user_data_list = [
-        (
-            {"discord_id": str(u.discord_id), "username": u.username, "avatar_hash": u.avatar_hash},
-            [(s.hex_color, s.item_name) for s in u.seymours]
-        )
-        for u in users
-    ]
-    
-    loop = asyncio.get_running_loop()
-    with ProcessPoolExecutor() as executor:
-        tasks = [
-            loop.run_in_executor(executor, partial(_compute_user_ranking, user_data, seymour_list))
-            for user_data, seymour_list in user_data_list
-        ]
-        rankings = list(await asyncio.gather(*tasks))
-    
-    await set_cached_rankings(redis, rankings)
-    
-    # Also update global stats from rankings
-    global_stats = sum_rankings_stats(rankings)
-    await set_cached_global_stats(redis, global_stats)
-    
-    return rankings
+    return await user_stats(db, redis, user)
 
 
 @router.get("/rankings")
@@ -90,9 +33,4 @@ async def get_rankings(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)]
 ):
-    cached = await get_cached_rankings(redis)
-    if cached:
-        return cached
-    
-    return await compute_and_cache_rankings(db, redis)
-
+    return await rankings(db, redis)

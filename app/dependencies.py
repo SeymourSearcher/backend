@@ -2,13 +2,13 @@ from typing import Annotated, Optional
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from jose import JWTError, jwt
 from redis.asyncio import Redis
 
 from app.database import async_session
 from app.config import get_settings
 from app.models import User
+from app.repositories.user_repo import UserRepository
 
 settings = get_settings()
 security = HTTPBearer(auto_error=False)
@@ -43,9 +43,8 @@ async def get_current_user(
     except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
-    result = await db.execute(select(User).where(User.discord_id == int(discord_id)))
-    user = result.scalar_one_or_none()
-    
+    user = await UserRepository(db).get_by_discord_id(int(discord_id))
+
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     
@@ -69,6 +68,5 @@ async def get_optional_user(
     except JWTError:
         return None
 
-    result = await db.execute(select(User).where(User.discord_id == int(discord_id)))
-    return result.scalar_one_or_none()
+    return await UserRepository(db).get_by_discord_id(int(discord_id))
 

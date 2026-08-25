@@ -1,9 +1,12 @@
 from datetime import timedelta
 import httpx
 from jose import jwt
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import utcnow
 from app.config import get_settings
+from app.errors import InvalidInputError
+from app.repositories.user_repo import UserRepository
 
 settings = get_settings()
 
@@ -43,4 +46,33 @@ def create_jwt(discord_id: int) -> str:
     expire = utcnow() + timedelta(minutes=settings.jwt_expire_minutes)
     payload = {"sub": str(discord_id), "exp": expire}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+async def login_with_discord(db: AsyncSession, code: str) -> str:
+    """Exchange an OAuth code for our own JWT, creating or refreshing the User."""
+    try:
+        token_data = await exchange_code(code)
+    except httpx.HTTPStatusError:
+        raise InvalidInputError("Invalid code")
+
+    try:
+        discord_user = await get_discord_user(token_data["access_token"])
+    except httpx.HTTPStatusError:
+        raise InvalidInputError("Failed to fetch user")
+
+    discord_id = int(discord_user["id"])
+    username = discord_user["username"]
+    avatar = discord_user.get("avatar")
+
+    users = UserRepository(db)
+    user = await users.get_by_discord_id(discord_id)
+    if user:
+        user.username = username
+        user.avatar_hash = avatar
+    else:
+        await users.add(discord_id, username, avatar)
+
+    await db.commit()
+
+    return create_jwt(discord_id)
 

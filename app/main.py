@@ -1,10 +1,17 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.config import get_settings
+from app.errors import (
+    ConflictError,
+    DomainError,
+    InvalidInputError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from app.routers import auth, users, seymours, stats, hex, marketplace, visualization
 from app.routers import auctions as auctions_router
 from app.services.player import close_client
@@ -20,6 +27,22 @@ async def lifespan(app: FastAPI):
 
 # Auction sync runs in a separate process; see app/worker.py.
 app = FastAPI(title="Seymour Searcher API", lifespan=lifespan)
+
+DOMAIN_ERROR_STATUS = {
+    NotFoundError: 404,
+    ConflictError: 400,
+    InvalidInputError: 400,
+    PermissionDeniedError: 403,
+}
+
+
+@app.exception_handler(DomainError)
+async def handle_domain_error(request: Request, exc: DomainError) -> JSONResponse:
+    status = next(
+        (code for cls, code in DOMAIN_ERROR_STATUS.items() if isinstance(exc, cls)), 400
+    )
+    return JSONResponse(status_code=status, content={"detail": str(exc)})
+
 
 app.add_middleware(
     CORSMiddleware,

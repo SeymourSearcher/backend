@@ -1,3 +1,5 @@
+from app.clock import utcnow
+from app.models import OrderStatus, SellOrder
 from app.services.compute import delta_e, get_lab, SETS, ITEM_TO_INFO, find_matching_seymours, KEY_ITEM_HEXES, HEX_TO_ITEMS, ITEM_TO_SET
 from app.services.matching import TIER_THRESHOLDS
 
@@ -132,4 +134,39 @@ def get_seymour_best_match(hex_color: str, piece_type: int) -> dict | None:
         "target_name": set_name,
         "target_hex": target_hex,
         "delta_e": round(de, 2)
+    }
+
+
+def is_expired(order) -> bool:
+    """Expiry is derived at read time; a lapsed order must never be written to."""
+    return order.status == OrderStatus.ACTIVE and order.expires_at < utcnow()
+
+
+def with_derived_status(response, order):
+    if is_expired(order):
+        return response.model_copy(update={"status": OrderStatus.EXPIRED})
+    return response
+
+
+def build_sell_order_response(order: SellOrder) -> dict:
+    seymour = order.seymour
+    match = get_seymour_best_match(seymour.hex_color, seymour.item_name)
+
+    return {
+        "id": order.id,
+        "price": order.price,
+        "status": order.status,
+        "created_at": order.created_at,
+        "expires_at": order.expires_at,
+        "seymour": {
+            "id": seymour.id,
+            "item_name": seymour.item_name,
+            "hex_color": seymour.hex_color,
+            "match": match,
+        },
+        "user": {
+            "discord_id": str(order.user.discord_id),
+            "username": order.user.username,
+            "avatar_hash": order.user.avatar_hash,
+        } if order.user else None,
     }
