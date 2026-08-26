@@ -48,6 +48,10 @@ class EndedAuction(Base):
     __tablename__ = "ended_auctions"
     __table_args__ = (
         Index("ix_ended_auctions_piece", "piece"),
+        # Piece is the one filter common enough to need the sort column with it:
+        # ~42k rows match a single piece, and without this the page filesorts
+        # them all (274ms at offset 10k, 32ms with).
+        Index("ix_ended_piece_timestamp", "piece", "timestamp"),
         Index("ix_ended_auctions_hex_color", "hex_color"),
         Index("ix_ended_auctions_price", "price"),
         Index("ix_ended_auctions_timestamp", "timestamp"),

@@ -81,6 +81,19 @@ def sort_column(model, sort_by: str):
     return model.timestamp
 
 
+def order_by_clause(model, sort_by: str, sort_order: str) -> list:
+    """Sort column then auction_id, both in the same direction.
+
+    The tiebreaker only exists to make pagination deterministic, so its
+    direction is free -- but it must follow sort_order. Pinning it ASC while
+    the sort column flips DESC produces a mixed-direction sort that matches no
+    index, and MySQL falls back to a full scan plus filesort: 310ms against 26ms
+    on 171k ended auctions.
+    """
+    order_func = desc if sort_order == "desc" else asc
+    return [order_func(sort_column(model, sort_by)), order_func(model.auction_id)]
+
+
 def match_fields(auction, include_dyes: bool) -> dict:
     """Derived match columns shared by the auction and recent-bid payloads."""
     target_hex = (auction.target_hex_all if include_dyes else auction.target_hex_keys) or ""
@@ -117,13 +130,24 @@ async def list_auctions(
     where = build_where(model, filters)
     total = await db.scalar(select(func.count()).select_from(model).where(where)) or 0
 
-    order_func = desc if sort_order == "desc" else asc
-    result = await db.execute(
-        select(model)
+    order = order_by_clause(model, sort_by, sort_order)
+
+    # Deferred join: page over auction_id alone, then fetch full rows for the
+    # page you keep. OFFSET n on SELECT * costs n random primary-key lookups
+    # before discarding them, and past ~10k rows MySQL gives up on the ordering
+    # index entirely and full-scans. Paging an index-only subquery avoids both:
+    # 543ms -> 30ms at offset 10k, 658ms -> 66ms at 100k, and no loss at offset 0.
+    page = (
+        select(model.auction_id)
         .where(where)
-        .order_by(order_func(sort_column(model, sort_by)), model.auction_id)
+        .order_by(*order)
         .offset(skip)
         .limit(limit)
+        .subquery()
+    )
+    result = await db.execute(
+        # The join does not preserve the subquery's order, so re-apply it.
+        select(model).join(page, model.auction_id == page.c.auction_id).order_by(*order)
     )
     auctions = [serialize(a, response_cls, filters.include_dyes) for a in result.scalars().all()]
     return auctions, total

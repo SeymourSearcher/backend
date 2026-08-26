@@ -9,6 +9,7 @@ from app.services.auction_queries import (
     build_where,
     match_columns_for,
     serialize,
+    order_by_clause,
     sort_column,
 )
 
@@ -127,3 +128,33 @@ def test_serialize_unmatched_row_does_not_raise():
     assert data.delta_e == 0.0
     assert data.tier is None
     assert data.abs_diff == 0
+
+
+class TestOrderByClause:
+    """The tiebreaker must share the sort column's direction.
+
+    A mixed-direction ORDER BY matches no index and costs a full scan plus
+    filesort -- see order_by_clause. These assert the compiled SQL because that
+    is the only place the direction is observable without a database.
+    """
+
+    @pytest.mark.parametrize("model", [EndedAuction, ActiveAuction])
+    @pytest.mark.parametrize("sort_by", ["price", "time"])
+    @pytest.mark.parametrize("order", ["asc", "desc"])
+    def test_both_terms_point_the_same_way(self, model, sort_by, order):
+        clauses = [sql(c) for c in order_by_clause(model, sort_by, order)]
+
+        assert len(clauses) == 2
+        suffix = " DESC" if order == "desc" else ""
+        assert all(c.endswith(suffix) for c in clauses), clauses
+        if order == "asc":
+            assert not any(c.endswith("DESC") for c in clauses), clauses
+
+    def test_it_tiebreaks_on_auction_id(self):
+        assert "auction_id" in sql(order_by_clause(EndedAuction, "time", "desc")[1])
+
+    def test_it_sorts_on_the_column_sort_column_picks(self):
+        for model in (EndedAuction, ActiveAuction):
+            for sort_by in ("price", "time"):
+                first = sql(order_by_clause(model, sort_by, "desc")[0])
+                assert sql(sort_column(model, sort_by)) in first
