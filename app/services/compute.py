@@ -305,27 +305,46 @@ def _build_user_matches(matches):
                 user_matches[key] = (user_hex, de)
     return user_matches
 
-def _get_set_pieces(item_names, user_matches, user_counts):
-    pieces = []
+def _resolve_slots(lookup, slots, user_counts):
+    """Split the slots a set asks for into owned and missing.
+
+    `slots` is [(lookup_key, tag, piece_idx)]; `tag` is whatever the caller wants
+    echoed back. Returns (owned, missing, shortfall) where owned is
+    [(tag, piece_idx, user_hex, delta_e)], missing is [(tag, piece_idx)], and
+    shortfall is True when one owned piece is claimed by more slots than the user
+    holds copies of it -- e.g. two items in a set wanting the same chestplate.
+    """
+    owned, missing = [], []
     demand = Counter()
-    
+
+    for key, tag, piece_idx in slots:
+        match = lookup.get(key)
+        if not match:
+            missing.append((tag, piece_idx))
+            continue
+        user_hex, de = match
+        demand[(user_hex, piece_idx)] += 1
+        owned.append((tag, piece_idx, user_hex, de))
+
+    shortfall = any(user_counts.get(k, 0) < needed for k, needed in demand.items())
+    return owned, missing, shortfall
+
+
+def _armor_slots(item_names):
+    """Returns (slots, all_known). A set with an item missing from the catalog can
+    never be complete, but its known items still count toward an incomplete one."""
+    slots, all_known = [], True
     for item_name in item_names:
         info = ITEM_TO_INFO.get(item_name)
         if not info:
-            return None
-        for piece_idx in info['pieces']:
-            match = user_matches.get((item_name, piece_idx))
-            if not match:
-                return None
-            user_hex, de = match
-            demand[(user_hex, piece_idx)] += 1
-            pieces.append((item_name, piece_idx, user_hex, de))
-    
-    for key, needed in demand.items():
-        if user_counts.get(key, 0) < needed:
-            return None
-    
-    return pieces
+            all_known = False
+            continue
+        slots.extend(((item_name, piece_idx), item_name, piece_idx) for piece_idx in info['pieces'])
+    return slots, all_known
+
+
+def _dye_slots(dye_name, stage):
+    return [((dye_name, stage, piece_idx), piece_idx, piece_idx) for piece_idx in range(PIECE_COUNT)]
 
 def _build_fade_dye_matches(matches):
     """Build lookup: (dye_name, stage, piece_idx) -> (user_hex, delta_e)"""
@@ -351,28 +370,14 @@ def find_fade_dye_sets(seymour_list, threshold=5.0):
     complete_dye_sets = []
     for dye_name, stages in FADE_DYES.items():
         for stage in stages:
-            pieces = []
-            demand = Counter()
-            complete = True
-            
-            for piece_idx in range(PIECE_COUNT):
-                match = dye_matches.get((dye_name, stage, piece_idx))
-                if not match:
-                    complete = False
-                    break
-                user_hex, de = match
-                demand[(user_hex, piece_idx)] += 1
-                pieces.append((piece_idx, user_hex, de))
-            
-            if complete:
-                for key, needed in demand.items():
-                    if user_counts.get(key, 0) < needed:
-                        complete = False
-                        break
-            
-            if complete:
-                complete_dye_sets.append((dye_name, stage, pieces))
-    
+            owned, missing, shortfall = _resolve_slots(
+                dye_matches, _dye_slots(dye_name, stage), user_counts
+            )
+            if owned and not missing and not shortfall:
+                complete_dye_sets.append(
+                    (dye_name, stage, [(p, h, de) for _, p, h, de in owned])
+                )
+
     return complete_dye_sets
 
 def find_armor_sets(seymour_list, threshold=5.0):
@@ -382,10 +387,13 @@ def find_armor_sets(seymour_list, threshold=5.0):
     
     complete_sets = []
     for set_name, item_names in SETS.items():
-        pieces = _get_set_pieces(item_names, user_matches, user_counts)
-        if pieces:
-            complete_sets.append((set_name, pieces))
-    
+        slots, all_known = _armor_slots(item_names)
+        if not all_known:
+            continue
+        owned, missing, shortfall = _resolve_slots(user_matches, slots, user_counts)
+        if owned and not missing and not shortfall:
+            complete_sets.append((set_name, owned))
+
     return complete_sets
 
 def find_sets(seymour_list, threshold=5.0):
@@ -404,30 +412,14 @@ def find_incomplete_armor_sets(seymour_list, threshold=5.0):
     
     incomplete_sets = []
     for set_name, item_names in SETS.items():
-        owned = []
-        missing = []
-        demand = Counter()
-        
-        for item_name in item_names:
-            info = ITEM_TO_INFO.get(item_name)
-            if not info:
-                continue
-            for piece_idx in info['pieces']:
-                match = user_matches.get((item_name, piece_idx))
-                if match:
-                    user_hex, de = match
-                    demand[(user_hex, piece_idx)] += 1
-                    owned.append((item_name, piece_idx, user_hex, de))
-                else:
-                    missing.append((item_name, piece_idx))
-
-        has_demand_issue = any(user_counts.get(k, 0) < v for k, v in demand.items())
-        if has_demand_issue:
+        slots, _ = _armor_slots(item_names)
+        owned, missing, shortfall = _resolve_slots(user_matches, slots, user_counts)
+        if shortfall:
             missing.append(("duplicate_needed", -1))
-        
-        if owned and (missing or has_demand_issue):
+
+        if owned and missing:
             incomplete_sets.append((set_name, owned, missing))
-    
+
     return incomplete_sets
 
 
@@ -443,26 +435,18 @@ def find_incomplete_dye_sets(seymour_list, threshold=5.0):
     incomplete_dye_sets = []
     for dye_name, stages in FADE_DYES.items():
         for stage in stages:
-            owned = []
-            missing = []
-            demand = Counter()
-            
-            for piece_idx in range(PIECE_COUNT):
-                match = dye_matches.get((dye_name, stage, piece_idx))
-                if match:
-                    user_hex, de = match
-                    demand[(user_hex, piece_idx)] += 1
-                    owned.append((piece_idx, user_hex, de))
-                else:
-                    missing.append(piece_idx)
-
-            has_demand_issue = any(user_counts.get(k, 0) < v for k, v in demand.items())
-            if has_demand_issue:
+            owned, missing, shortfall = _resolve_slots(
+                dye_matches, _dye_slots(dye_name, stage), user_counts
+            )
+            missing = [tag for tag, _ in missing]
+            if shortfall:
                 missing.append(-1)
-            
-            if owned and (missing or has_demand_issue):
-                incomplete_dye_sets.append((dye_name, stage, owned, missing))
-    
+
+            if owned and missing:
+                incomplete_dye_sets.append(
+                    (dye_name, stage, [(p, h, de) for _, p, h, de in owned], missing)
+                )
+
     return incomplete_dye_sets
 
 
