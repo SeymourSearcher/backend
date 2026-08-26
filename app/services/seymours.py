@@ -10,11 +10,11 @@ from app.models import Seymour, User
 from app.repositories.seymour_repo import SeymourRepository
 from app.services.cache import (
     CUSTOM_SETS,
-    HEX_INFO,
     SEYMOUR_FILTERS,
     SEYMOUR_RESULTS,
     USER_SEYMOURS,
     custom_sets_hash,
+    invalidate_hex_pages,
     invalidate_user_seymours,
 )
 from app.services.rankings import refresh_user_stats
@@ -171,7 +171,7 @@ async def replace_all(
 
     await refresh_user_stats(db, user.id)
     await invalidate_user_seymours(redis, user.id)
-    await HEX_INFO.invalidate_all(redis)
+    await invalidate_hex_pages(redis)
 
     return len(parsed), skipped
 
@@ -194,6 +194,7 @@ async def delete_one(db: AsyncSession, redis: Redis, user: User, seymour_id: int
 
     await refresh_user_stats(db, user.id)
     await invalidate_user_seymours(redis, user.id)
+    await invalidate_hex_pages(redis)
 
 
 async def delete_all(db: AsyncSession, redis: Redis, user: User) -> None:
@@ -202,3 +203,4 @@ async def delete_all(db: AsyncSession, redis: Redis, user: User) -> None:
 
     await refresh_user_stats(db, user.id)
     await invalidate_user_seymours(redis, user.id)
+    await invalidate_hex_pages(redis)

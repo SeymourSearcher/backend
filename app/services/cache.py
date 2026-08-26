@@ -49,6 +49,10 @@ class CacheEntry:
 CUSTOM_SETS = CacheEntry("custom_sets:", 3600)
 HEX_INFO = CacheEntry("hex_info:", 1800)
 
+# One entry, not one per hex: the payload behind every hex page is the same walk
+# of the whole seymours table. See app/services/owner_hexes.py.
+OWNER_HEXES = CacheEntry("owner_hexes", 1800)
+
 # Kept warm while a page is being browsed rather than expiring mid-session.
 USER_SEYMOURS = CacheEntry("user_seymours:", 60, refresh_on_read=True)
 
@@ -76,6 +80,13 @@ def custom_sets_hash(seymour_list: list) -> str:
 async def invalidate_user_seymours(redis: Redis, user_id: int) -> None:
     await SEYMOUR_RESULTS.invalidate_all(redis, user_id, "")
     await USER_SEYMOURS.invalidate(redis, user_id)
+
+
+async def invalidate_hex_pages(redis: Redis) -> None:
+    """Both derive from the whole seymours table, so any user's write clears them
+    for every hex code."""
+    await HEX_INFO.invalidate_all(redis)
+    await OWNER_HEXES.invalidate(redis)
 
 
 RATE_LIMIT_PREFIX = "ratelimit:"

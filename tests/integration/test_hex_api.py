@@ -81,3 +81,59 @@ async def test_second_call_is_served_from_cache(client, owners, db):
     await db.commit()
 
     assert (await client.get(f"/hex/{TARGET}")).json() == first
+
+
+class TestOwnerSnapshot:
+    """The owner rows are cached once for all hex codes, not once per code.
+
+    Rebuilding them is a full walk of the seymours table -- ~1s on prod, and 97%
+    of a cold request -- and the result is identical whichever hex was asked for.
+    """
+
+    async def test_a_different_hex_reuses_the_snapshot(self, client, owners, db):
+        """include_dyes is its own hex_info key, so this misses that cache but
+        must still hit the shared owner snapshot."""
+        await client.get(f"/hex/{TARGET}")
+
+        await db.execute(Seymour.__table__.delete())
+        await db.commit()
+
+        tiers = (await client.get(f"/hex/{TARGET}?include_dyes=true")).json()
+        assert [u["username"] for u in tiers["top_matches"][0]["users_by_tier"]["t1"]] == [
+            "exact",
+            "close",
+        ]
+
+    async def test_an_upload_rebuilds_it(self, client, as_user, owners, db, user):
+        await client.get(f"/hex/{TARGET}")
+
+        as_user(user)
+        upload = await client.post(
+            "/seymours/upload",
+            files={"file": ("s.txt", f"Velvet Top Hat | #{TARGET} | whatever\n", "text/plain")},
+        )
+        assert upload.json()["imported"] == 1
+
+        names = [
+            u["username"]
+            for u in (await client.get(f"/hex/{TARGET}")).json()["top_matches"][0]
+            ["users_by_tier"]["t1"]
+        ]
+        assert "tester" in names
+
+    async def test_a_delete_rebuilds_it(self, client, as_user, db):
+        """Deletes used to skip hex invalidation entirely, so a removed Seymour
+        kept its owner on the hex page for the full 30 minute TTL."""
+        owner = User(discord_id=21, username="leaver", avatar_hash=None)
+        db.add(owner)
+        await db.flush()
+        db.add(Seymour(user_id=owner.id, item_name=Piece.HELMET, hex_color=TARGET))
+        await db.commit()
+
+        await client.get(f"/hex/{TARGET}")
+
+        as_user(owner)
+        assert (await client.delete("/seymours/")).status_code == 200
+
+        tiers = (await client.get(f"/hex/{TARGET}")).json()["top_matches"][0]["users_by_tier"]
+        assert "leaver" not in [u["username"] for tier in tiers.values() for u in tier]

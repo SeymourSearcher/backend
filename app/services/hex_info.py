@@ -5,8 +5,8 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import InvalidInputError
-from app.repositories.seymour_repo import SeymourRepository
 from app.services.cache import HEX_INFO
+from app.services.owner_hexes import OwnerHexes, get_owner_hexes
 from app.services.compute import (
     HEX_NEIGHBORHOODS_ALL,
     HEX_NEIGHBORHOODS_KEYS,
@@ -57,7 +57,7 @@ def build_match_info(target_hex: str, de: float, include_dyes: bool = False) -> 
 
 
 def compute_user_tiers(
-    owner_hexes: list[tuple[int, str, int, str | None, str]],
+    owners: OwnerHexes,
     targets: list[tuple[str, set[int]]],
 ) -> list[dict]:
     """Best tier per user for each target, in one pass over the table.
@@ -68,26 +68,26 @@ def compute_user_tiers(
     target_labs = [get_lab(target_hex) for target_hex, _ in targets]
     best_per_target: list[dict] = [{} for _ in targets]
 
-    for user_id, username, discord_id, avatar_hash, hex_color in owner_hexes:
-        hex_int = int(hex_color, 16)
+    for user_index, hex_int in zip(owners.idx, owners.hexes):
         lab = None
 
         for i, (_, neighborhood) in enumerate(targets):
             if hex_int not in neighborhood:
                 continue
             if lab is None:
-                lab = get_lab(hex_color)
+                lab = get_lab(f"{hex_int:06X}")
             de_val = float(delta_e(lab, target_labs[i]))
 
             best = best_per_target[i]
-            previous = best.get(user_id)
-            if previous is None or de_val < previous[1]:
-                best[user_id] = ((username, discord_id, avatar_hash), de_val)
+            previous = best.get(user_index)
+            if previous is None or de_val < previous:
+                best[user_index] = de_val
 
     results = []
     for best in best_per_target:
         users_by_tier = {"t1": [], "t2": [], "t3": []}
-        for (username, discord_id, avatar_hash), best_de in best.values():
+        for user_index, best_de in best.items():
+            _, username, discord_id, avatar_hash = owners.users[user_index]
             tier = get_tier(best_de)
             if tier:
                 users_by_tier[tier].append({
@@ -121,8 +121,8 @@ async def get_hex_info(
         for m in top_matches
     ]
 
-    owner_hexes = await SeymourRepository(db).list_owner_hexes()
-    tiers = await asyncio.to_thread(compute_user_tiers, owner_hexes, targets)
+    owners = await get_owner_hexes(db, redis)
+    tiers = await asyncio.to_thread(compute_user_tiers, owners, targets)
     for match, users_by_tier in zip(top_matches, tiers):
         match["users_by_tier"] = users_by_tier
 
