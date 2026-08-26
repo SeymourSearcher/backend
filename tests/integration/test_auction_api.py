@@ -170,3 +170,64 @@ async def test_invalid_query_values_are_rejected(client, clean_db):
     assert (await client.get("/auctions/ended", params={"tier": "t9"})).status_code == 422
     assert (await client.get("/auctions/ended", params={"limit": 0})).status_code == 422
     assert (await client.get("/auctions/ended", params={"skip": -1})).status_code == 422
+
+
+class TestCountCaching:
+    """`total` is cached because it only feeds a label and costs a full scan.
+
+    What matters is that a changed filter never reads another filter's count,
+    and that a hit genuinely avoids the query.
+    """
+
+    async def test_the_count_is_served_from_cache_on_a_second_call(
+        self, client, seed, redis, stub_names
+    ):
+        await seed(ended_rows(30))
+
+        first = await client.get("/auctions/ended?limit=5")
+        assert first.json()["total"] == 30
+
+        keys = await redis.keys("auction_count:*")
+        assert len(keys) == 1, keys
+
+        # Rows added behind the cache must not change the answer within the TTL.
+        await seed([EndedAuction(
+            auction_id="extra", seller_uuid="s", buyer_uuid="b", price=1, is_bin=True,
+            item_uuid="i", hex_color="FF0000", piece=0, timestamp=BASE_MS,
+            target_hex_keys="FF0102", delta_e_keys=0.0, tier_keys=get_tier(0.0),
+            target_hex_all="FF0000", delta_e_all=0.0, tier_all=get_tier(0.0),
+        )])
+
+        second = await client.get("/auctions/ended?limit=5")
+        assert second.json()["total"] == 30
+        assert len(second.json()["auctions"]) == 5
+
+    async def test_a_different_filter_gets_its_own_count(self, client, seed, redis, stub_names):
+        await seed(ended_rows(30))
+
+        everything = (await client.get("/auctions/ended?limit=5")).json()["total"]
+        one_piece = (await client.get("/auctions/ended?limit=5&pieces=0")).json()["total"]
+
+        assert everything == 30
+        assert one_piece < everything
+        assert len(await redis.keys("auction_count:*")) == 2
+
+    async def test_sort_order_shares_one_cached_count(self, client, seed, redis, stub_names):
+        await seed(ended_rows(30))
+
+        for order in ("asc", "desc"):
+            for by in ("price", "timestamp"):
+                r = await client.get(f"/auctions/ended?limit=5&sort_by={by}&sort_order={order}")
+                assert r.json()["total"] == 30
+
+        # Sorting reorders rows; it never resizes the set.
+        assert len(await redis.keys("auction_count:*")) == 1
+
+    async def test_paging_shares_one_cached_count(self, client, seed, redis, stub_names):
+        await seed(ended_rows(30))
+
+        for skip in (0, 5, 10):
+            r = await client.get(f"/auctions/ended?limit=5&skip={skip}")
+            assert r.json()["total"] == 30
+
+        assert len(await redis.keys("auction_count:*")) == 1

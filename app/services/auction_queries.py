@@ -4,15 +4,19 @@ Every filter here resolves to a SQL predicate over persisted columns, so
 filtering, sorting and pagination all happen in the database. See
 app/services/matching.py for why tier is a range predicate rather than a column.
 """
-from dataclasses import dataclass
+import hashlib
+import json
+from dataclasses import asdict, dataclass
 from typing import Literal
 
+from redis.asyncio import Redis
 from sqlalchemy import and_, asc, desc, false, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import NotFoundError
 from app.models import ActiveAuction
 from app.repositories.auction_repo import AuctionRepository
+from app.services.cache import AUCTION_COUNT
 from app.services.matching import (
     compute_abs_diff,
     get_name_for_hex,
@@ -117,6 +121,37 @@ def serialize(auction, response_cls, include_dyes: bool):
     return response_cls(**data)
 
 
+def _count_key(model, filters: AuctionFilters) -> str:
+    """Everything that changes the count, and nothing that doesn't.
+
+    Sort and paging are excluded deliberately -- they reorder or window the
+    result but never resize it, and folding them in would shard the cache into
+    one entry per column-and-direction for no gain.
+    """
+    payload = json.dumps(asdict(filters), sort_keys=True, default=str)
+    return f"{model.__tablename__}:{hashlib.md5(payload.encode()).hexdigest()}"
+
+
+async def count_auctions(db: AsyncSession, redis: Redis | None, model, filters, where) -> int:
+    """Matching rows, cached. Only a display label reads this.
+
+    A miss costs a full index scan of every matching row, so a stale count is
+    worth more than a live one here: it is never older than the sync that
+    produces the rows it describes.
+    """
+    if redis is None:
+        return await db.scalar(select(func.count()).select_from(model).where(where)) or 0
+
+    key = _count_key(model, filters)
+    cached = await AUCTION_COUNT.get(redis, key)
+    if cached is not None:
+        return cached
+
+    total = await db.scalar(select(func.count()).select_from(model).where(where)) or 0
+    await AUCTION_COUNT.set(redis, total, key)
+    return total
+
+
 async def list_auctions(
     db: AsyncSession,
     model,
@@ -126,9 +161,10 @@ async def list_auctions(
     sort_order: Literal["asc", "desc"],
     skip: int,
     limit: int,
+    redis: Redis | None = None,
 ) -> tuple[list, int]:
     where = build_where(model, filters)
-    total = await db.scalar(select(func.count()).select_from(model).where(where)) or 0
+    total = await count_auctions(db, redis, model, filters, where)
 
     order = order_by_clause(model, sort_by, sort_order)
 

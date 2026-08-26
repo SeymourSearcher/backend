@@ -1,8 +1,9 @@
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db
+from app.dependencies import get_db, get_redis
 from app.models import ActiveAuction, EndedAuction
 from app.schemas.auction import (
     ActiveAuctionResponse,
@@ -55,6 +56,7 @@ Filters = Annotated[AuctionFilters, Depends(auction_filters)]
 @router.get("/active", response_model=ActiveAuctionListResponse)
 async def list_active_auctions(
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
     filters: Filters,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
@@ -62,7 +64,8 @@ async def list_active_auctions(
     sort_order: Literal["asc", "desc"] = Query("asc"),
 ):
     auctions, total = await list_auctions(
-        db, ActiveAuction, ActiveAuctionResponse, filters, sort_by, sort_order, skip, limit
+        db, ActiveAuction, ActiveAuctionResponse, filters, sort_by, sort_order, skip, limit,
+        redis=redis,
     )
     await attach_names(db, auctions, "seller_uuid")
     return ActiveAuctionListResponse(auctions=auctions, total=total)
@@ -71,6 +74,7 @@ async def list_active_auctions(
 @router.get("/ended", response_model=EndedAuctionListResponse)
 async def list_ended_auctions(
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
     filters: Filters,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
@@ -78,7 +82,8 @@ async def list_ended_auctions(
     sort_order: Literal["asc", "desc"] = Query("desc"),
 ):
     auctions, total = await list_auctions(
-        db, EndedAuction, EndedAuctionResponse, filters, sort_by, sort_order, skip, limit
+        db, EndedAuction, EndedAuctionResponse, filters, sort_by, sort_order, skip, limit,
+        redis=redis,
     )
     await attach_names(db, auctions, "seller_uuid", "buyer_uuid")
     return EndedAuctionListResponse(auctions=auctions, total=total)

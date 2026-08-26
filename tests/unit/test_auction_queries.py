@@ -5,6 +5,7 @@ from app.models import ActiveAuction, EndedAuction
 from app.schemas.auction import EndedAuctionResponse
 from app.pieces import parse_pieces
 from app.services.auction_queries import (
+    _count_key,
     AuctionFilters,
     build_where,
     match_columns_for,
@@ -158,3 +159,42 @@ class TestOrderByClause:
             for sort_by in ("price", "time"):
                 first = sql(order_by_clause(model, sort_by, "desc")[0])
                 assert sql(sort_column(model, sort_by)) in first
+
+
+class TestCountKey:
+    """The count cache key must cover every filter and nothing else.
+
+    Too narrow and two different filters share a count; too wide and the cache
+    shards per sort direction and never hits.
+    """
+
+    def test_identical_filters_agree(self):
+        a = AuctionFilters(tier="t1", min_price=100)
+        b = AuctionFilters(tier="t1", min_price=100)
+        assert _count_key(EndedAuction, a) == _count_key(EndedAuction, b)
+
+    @pytest.mark.parametrize("field, value", [
+        ("hex_color", "AABBCC"),
+        ("pieces", [1, 2]),
+        ("min_price", 500),
+        ("max_price", 900),
+        ("bin_filter", "bin"),
+        ("tier", "t2"),
+        ("set_name", "some-set"),
+        ("include_dyes", False),
+    ])
+    def test_every_filter_field_changes_the_key(self, field, value):
+        base = AuctionFilters()
+        assert getattr(base, field) != value, "pick a value that differs from the default"
+        changed = AuctionFilters(**{field: value})
+        assert _count_key(EndedAuction, base) != _count_key(EndedAuction, changed)
+
+    def test_the_two_tables_never_share_a_count(self):
+        f = AuctionFilters(tier="t1")
+        assert _count_key(EndedAuction, f) != _count_key(ActiveAuction, f)
+
+    def test_field_values_cannot_collide_across_fields(self):
+        # A naive concatenation would make these two identical.
+        a = AuctionFilters(hex_color="A", set_name="B")
+        b = AuctionFilters(hex_color="AB", set_name=None)
+        assert _count_key(EndedAuction, a) != _count_key(EndedAuction, b)

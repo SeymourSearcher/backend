@@ -55,6 +55,11 @@ HEX_INFO = CacheEntry("hex_info:", 1800)
 # Kept warm while a page is being browsed rather than expiring mid-session.
 USER_SEYMOURS = CacheEntry("user_seymours:", 60, refresh_on_read=True)
 
+# Only feeds a row-count label, but it is a full index scan of every matching
+# row -- 58ms of the auctions endpoint's 84ms. TTL matches ENDED_SYNC_INTERVAL,
+# so the number is never staler than the data behind it.
+AUCTION_COUNT = CacheEntry("auction_count:", 30)
+
 # Results and filters deliberately share a prefix so invalidating a user's
 # seymours clears both in one scan.
 SEYMOUR_RESULTS = CacheEntry("seymours:", 1800)
