@@ -49,5 +49,5 @@ the gate before shipping.
   cannot serve tests running on a different loop.
 - `app/config.py` is instantiated at import time, so `tests/conftest.py` fixes
   the environment before any `app.*` import. Do not import `app` above it.
-- Anything calling `get_player_names` needs it stubbed, or the test hits the
-  live upstream API.
+- Anything calling `resolve_names` needs it stubbed, or the test hits the live
+  upstream API. `lookup_names` is pure SQL and is safe unstubbed.

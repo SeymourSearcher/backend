@@ -116,9 +116,9 @@ def as_user(sessionmaker):
 
 
 @pytest.fixture(autouse=True)
-def no_upstream_lookups(monkeypatch):
-    """attach_names would otherwise call the live username API."""
+def stub_names(monkeypatch):
+    """Names come from the players table, which these fixtures don't populate."""
     async def fake(db, uuids):
         return {uuid: f"player-{uuid[:4]}" for uuid in uuids}
 
-    monkeypatch.setattr("app.services.auction_queries.get_player_names", fake)
+    monkeypatch.setattr("app.services.auction_queries.lookup_names", fake)

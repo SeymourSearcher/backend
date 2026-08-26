@@ -1,5 +1,3 @@
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -15,19 +13,12 @@ from app.errors import (
 from app.schemas.common import HealthResponse
 from app.routers import auth, users, seymours, stats, hex, marketplace, visualization
 from app.routers import auctions as auctions_router
-from app.services.player import close_client
 
 settings = get_settings()
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    yield
-    await close_client()
-
-
-# Auction sync runs in a separate process; see app/worker.py.
-app = FastAPI(title="Seymour Searcher API", lifespan=lifespan)
+# Auction sync and username resolution both run in a separate process; see
+# app/worker.py. Nothing here makes outbound HTTP calls.
+app = FastAPI(title="Seymour Searcher API")
 
 DOMAIN_ERROR_STATUS = {
     NotFoundError: 404,

@@ -12,6 +12,8 @@ import signal
 import sys
 
 from app.services.auction_sync import start_sync_loop
+from app.services.mojang import close_client
+from app.services.player_sync import player_refresh_loop
 
 logger = logging.getLogger("worker")
 
@@ -35,7 +37,7 @@ async def main() -> None:
             # Windows dev: fall back to KeyboardInterrupt handling below.
             pass
 
-    sync = asyncio.create_task(start_sync_loop())
+    sync = asyncio.create_task(asyncio.gather(start_sync_loop(), player_refresh_loop()))
     logger.info("Auction sync worker started")
 
     await asyncio.wait([sync, stop], return_when=asyncio.FIRST_COMPLETED)
@@ -45,6 +47,7 @@ async def main() -> None:
         await sync
     except asyncio.CancelledError:
         pass
+    await close_client()
     logger.info("Auction sync worker stopped")
 
 

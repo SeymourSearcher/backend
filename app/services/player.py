@@ -1,110 +1,72 @@
-"""UUID -> Minecraft username lookups, cached in the players table.
+"""UUID -> Minecraft username, stored in the players table.
 
-Upstream calls share one pooled client. A page of auctions can need ~200
-lookups; opening a client per call meant a fresh TLS handshake for each, and
-unbounded concurrency that the upstream API degrades under. The pool cap is
-what bounds concurrency here -- excess requests queue on it. See
-MAX_CONNECTIONS for the measured tradeoff.
+The table is the store, not a cache in front of one: a uuid resolved once is
+kept indefinitely and refreshed on a schedule. That split is deliberate and is
+the whole point of this module's entry points.
+
+`lookup_names` is the read path. It only ever SELECTs, so a request can never
+block on the upstream API or hold a pooled connection across a network call.
+A uuid with no row yet simply has no name in the response.
+
+`resolve_names` and `revalidate_names` are the write paths and belong to the
+worker (see app/services/player_sync.py). They call upstream and persist.
 """
 import asyncio
-from datetime import datetime, timedelta
+import logging
+from datetime import timedelta
 
-import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import utcnow as _utcnow
 from app.repositories.player_repo import PlayerRepository
+from app.services import mojang
 
-# Usernames change rarely, so a long TTL keeps cold pages off the upstream API.
-CACHE_DURATION = timedelta(days=30)
+logger = logging.getLogger(__name__)
 
-# A uuid that failed is not retried for this long, so one unresolvable account
-# cannot cost a request timeout on every single page load.
-FAILURE_TTL = timedelta(minutes=15)
-MAX_FAILURES_TRACKED = 10_000
-
-API_URL = "https://api.ashcon.app/mojang/v2/user/{}"
-REQUEST_TIMEOUT = 5.0
-
-# Calibrated against the live API with a page-sized batch of 60 lookups:
-# unbounded 7.6s (2 timeouts), 10 -> 1.37s, 25 -> 0.81s, 50 -> 5.13s (upstream
-# degrades). Re-measure before changing; more concurrency is not better here.
-MAX_CONNECTIONS = 25
-
-_client: httpx.AsyncClient | None = None
-_client_lock = asyncio.Lock()
-_failures: dict[str, datetime] = {}
+# How old a stored name may get before the worker queues it for a refresh.
+# Nothing expires on read -- a name past this age is still served.
+REFRESH_AFTER = timedelta(days=25)
 
 
-async def get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None:
-        async with _client_lock:
-            if _client is None:
-                _client = httpx.AsyncClient(
-                    limits=httpx.Limits(
-                        max_connections=MAX_CONNECTIONS,
-                        max_keepalive_connections=MAX_CONNECTIONS,
-                    ),
-                    # Generous pool timeout: waiting for a free connection must not
-                    # count against the per-request budget when many lookups queue.
-                    timeout=httpx.Timeout(REQUEST_TIMEOUT, pool=30.0),
-                )
-    return _client
+def _by_clean(uuids: list[str]) -> dict[str, str]:
+    """Dash-stripped uuid -> the form the caller passed, which keys the result."""
+    return {uuid.replace("-", ""): uuid for uuid in uuids if uuid}
 
 
-async def close_client() -> None:
-    global _client
-    if _client is not None:
-        await _client.aclose()
-        _client = None
+async def lookup_names(db: AsyncSession, uuids: list[str]) -> dict[str, str]:
+    """Stored names, whatever their age. Never calls upstream, never writes."""
+    by_clean = _by_clean(uuids)
+    if not by_clean:
+        return {}
+
+    players = await PlayerRepository(db).by_uuid(list(by_clean))
+    return {
+        original: players[clean].username
+        for clean, original in by_clean.items()
+        if clean in players
+    }
 
 
-def _record_failure(uuid: str) -> None:
-    if len(_failures) >= MAX_FAILURES_TRACKED:
-        cutoff = _utcnow() - FAILURE_TTL
-        for key in [k for k, at in _failures.items() if at < cutoff]:
-            del _failures[key]
-    _failures[uuid] = _utcnow()
+async def resolve_names(db: AsyncSession, uuids: list[str]) -> dict[str, str]:
+    """Fetch and persist names for uuids that are missing or due a refresh.
 
-
-def _recently_failed(uuid: str) -> bool:
-    failed_at = _failures.get(uuid)
-    return failed_at is not None and _utcnow() - failed_at < FAILURE_TTL
-
-
-async def fetch_username_from_api(uuid: str) -> str | None:
-    if _recently_failed(uuid):
-        return None
-
-    client = await get_client()
-    try:
-        response = await client.get(API_URL.format(uuid))
-        if response.status_code == 200:
-            _failures.pop(uuid, None)
-            return response.json().get("username")
-    except httpx.RequestError:
-        pass
-
-    _record_failure(uuid)
-    return None
-
-
-async def get_player_names(db: AsyncSession, uuids: list[str]) -> dict[str, str]:
-    clean_uuids = {uuid.replace("-", ""): uuid for uuid in uuids if uuid}
-    if not clean_uuids:
+    One request per uuid -- the only option when there is no stored name to
+    revalidate. Worker-only: this does network I/O and commits.
+    """
+    by_clean = _by_clean(uuids)
+    if not by_clean:
         return {}
 
     repo = PlayerRepository(db)
-    players = await repo.by_uuid(list(clean_uuids.keys()))
+    players = await repo.by_uuid(list(by_clean))
 
-    names = {}
+    names: dict[str, str] = {}
     to_fetch = []
     now = _utcnow()
 
-    for clean, original in clean_uuids.items():
+    for clean, original in by_clean.items():
         player = players.get(clean)
-        if player and now - player.last_updated < CACHE_DURATION:
+        if player and now - player.last_updated < REFRESH_AFTER:
             names[original] = player.username
         else:
             to_fetch.append((clean, original, player))
@@ -112,7 +74,7 @@ async def get_player_names(db: AsyncSession, uuids: list[str]) -> dict[str, str]
     if not to_fetch:
         return names
 
-    fetched = await asyncio.gather(*[fetch_username_from_api(clean) for clean, _, _ in to_fetch])
+    fetched = await asyncio.gather(*[mojang.name_for_uuid(clean) for clean, _, _ in to_fetch])
 
     new_players = []
     for (clean, original, player), username in zip(to_fetch, fetched):
@@ -124,8 +86,39 @@ async def get_player_names(db: AsyncSession, uuids: list[str]) -> dict[str, str]
 
     if new_players:
         await repo.upsert(new_players)
-        # Committed here rather than left to the caller: every caller is a read
-        # endpoint that never commits, and this cache is the point of the table.
         await db.commit()
 
     return names
+
+
+async def revalidate_names(db: AsyncSession, players: list[tuple[str, str]]) -> tuple[int, int]:
+    """Refresh stored names ten at a time. Returns (confirmed, rechecked).
+
+    Proving a stored name still belongs to the uuid we hold it against costs a
+    tenth of a request, because the bulk endpoint runs name->uuid and we
+    already have the name. Only names that moved or vanished -- roughly one in
+    five, and the only ones whose stored value is actually wrong -- fall
+    through to a per-uuid lookup.
+
+    Confirmed rows are touched, not rewritten: the name is unchanged, so only
+    last_updated moves.
+    """
+    if not players:
+        return 0, 0
+
+    live = await mojang.uuids_for_names([name for _, name in players])
+
+    confirmed, changed = [], []
+    for uuid, name in players:
+        # Absent means the name is unregistered; a different uuid means it was
+        # taken over. Either way the stored name is no longer this player's.
+        (confirmed if live.get(name.lower()) == uuid else changed).append(uuid)
+
+    if confirmed:
+        await PlayerRepository(db).touch(confirmed, _utcnow())
+        await db.commit()
+
+    if changed:
+        await resolve_names(db, changed)
+
+    return len(confirmed), len(changed)

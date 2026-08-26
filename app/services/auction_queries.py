@@ -20,7 +20,7 @@ from app.services.matching import (
     get_tier,
     tier_bounds,
 )
-from app.services.player import get_player_names
+from app.services.player import lookup_names
 
 
 @dataclass(frozen=True)
@@ -133,7 +133,7 @@ async def attach_names(db: AsyncSession, auctions: list, *fields: str) -> None:
     uuids = {getattr(a, f) for a in auctions for f in fields if getattr(a, f)}
     if not uuids:
         return
-    names = await get_player_names(db, list(uuids))
+    names = await lookup_names(db, list(uuids))
     for auction in auctions:
         for field in fields:
             setattr(auction, f"{field.removesuffix('_uuid')}_name", names.get(getattr(auction, field)))
@@ -153,7 +153,7 @@ async def get_auction(db: AsyncSession, model, auction_id: str, response_cls, in
 
 async def recent_bids(db: AsyncSession, limit: int, include_dyes: bool) -> list[dict]:
     rows = await AuctionRepository(db).recent_bids(limit)
-    names = await get_player_names(db, list({bid.bidder_uuid for bid, _ in rows}))
+    names = await lookup_names(db, list({bid.bidder_uuid for bid, _ in rows}))
 
     return [
         {
