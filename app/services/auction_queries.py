@@ -121,12 +121,12 @@ def serialize(auction, response_cls, include_dyes: bool):
     return response_cls(**data)
 
 
-def _count_key(model, filters: AuctionFilters) -> str:
-    """Everything that changes the count, and nothing that doesn't.
+def filters_key(model, filters: AuctionFilters) -> str:
+    """Cache key for anything derived from exactly this filtered row set.
 
     Sort and paging are excluded deliberately -- they reorder or window the
-    result but never resize it, and folding them in would shard the cache into
-    one entry per column-and-direction for no gain.
+    result but never change which rows match, and folding them in would shard
+    the cache into one entry per column-and-direction for no gain.
     """
     payload = json.dumps(asdict(filters), sort_keys=True, default=str)
     return f"{model.__tablename__}:{hashlib.md5(payload.encode()).hexdigest()}"
@@ -142,7 +142,7 @@ async def count_auctions(db: AsyncSession, redis: Redis | None, model, filters, 
     if redis is None:
         return await db.scalar(select(func.count()).select_from(model).where(where)) or 0
 
-    key = _count_key(model, filters)
+    key = filters_key(model, filters)
     cached = await AUCTION_COUNT.get(redis, key)
     if cached is not None:
         return cached

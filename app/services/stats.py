@@ -1,19 +1,15 @@
+"""Turning one user's Seymour list into their nine tallied stats.
+
+Pure computation -- persistence and the ranking read path live in
+app/services/rankings.py.
+"""
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.compute import find_matching_seymours, find_sets
 from app.services.compute import KEY_ITEM_HEXES, HEX_WORDS
 from app.services.compute import seymour_converter
-from app.services.cache import GLOBAL_STATS, RANKINGS
 from app.services.matching import get_tier
-
-# Must stay in step with StatsResponse; test_stats.py pins them together.
-STAT_KEYS = (
-    "stars", "t1", "t2", "t3", "words", "dupes",
-    "total_sets", "dyed_sets", "total_seymours",
-)
 
 
 def count_dupes(seymour_list):
@@ -89,26 +85,3 @@ def get_stats(seymour_list):
         "dyed_sets": len(dyed_sets),
         "total_seymours": len(seymour_list),
     }
-
-
-
-
-def sum_rankings_stats(rankings: list[dict]) -> dict:
-    """Global stats are just the per-user stats added up."""
-    return {key: sum(r[key] for r in rankings) for key in STAT_KEYS}
-
-
-async def get_global_stats(redis: Redis, db: AsyncSession) -> dict:
-    cached = await GLOBAL_STATS.get(redis)
-    if cached:
-        return cached
-
-    cached_rankings = await RANKINGS.get(redis)
-    if cached_rankings:
-        stats = sum_rankings_stats(cached_rankings)
-        await GLOBAL_STATS.set(redis, stats)
-        return stats
-
-    # Deferred: app.services.rankings imports this module at import time.
-    from app.services.rankings import compute_and_cache_rankings
-    return sum_rankings_stats(await compute_and_cache_rankings(db, redis))

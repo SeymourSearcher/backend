@@ -5,7 +5,7 @@ from app.models import ActiveAuction, EndedAuction
 from app.schemas.auction import EndedAuctionResponse
 from app.pieces import parse_pieces
 from app.services.auction_queries import (
-    _count_key,
+    filters_key,
     AuctionFilters,
     build_where,
     match_columns_for,
@@ -161,17 +161,18 @@ class TestOrderByClause:
                 assert sql(sort_column(model, sort_by)) in first
 
 
-class TestCountKey:
-    """The count cache key must cover every filter and nothing else.
+class TestFiltersKey:
+    """The key must cover every filter and nothing else.
 
-    Too narrow and two different filters share a count; too wide and the cache
-    shards per sort direction and never hits.
+    Shared by the count and the stats caches, so too narrow and two different
+    filters share a result; too wide and the cache shards per sort direction
+    and never hits.
     """
 
     def test_identical_filters_agree(self):
         a = AuctionFilters(tier="t1", min_price=100)
         b = AuctionFilters(tier="t1", min_price=100)
-        assert _count_key(EndedAuction, a) == _count_key(EndedAuction, b)
+        assert filters_key(EndedAuction, a) == filters_key(EndedAuction, b)
 
     @pytest.mark.parametrize("field, value", [
         ("hex_color", "AABBCC"),
@@ -187,14 +188,14 @@ class TestCountKey:
         base = AuctionFilters()
         assert getattr(base, field) != value, "pick a value that differs from the default"
         changed = AuctionFilters(**{field: value})
-        assert _count_key(EndedAuction, base) != _count_key(EndedAuction, changed)
+        assert filters_key(EndedAuction, base) != filters_key(EndedAuction, changed)
 
     def test_the_two_tables_never_share_a_count(self):
         f = AuctionFilters(tier="t1")
-        assert _count_key(EndedAuction, f) != _count_key(ActiveAuction, f)
+        assert filters_key(EndedAuction, f) != filters_key(ActiveAuction, f)
 
     def test_field_values_cannot_collide_across_fields(self):
         # A naive concatenation would make these two identical.
         a = AuctionFilters(hex_color="A", set_name="B")
         b = AuctionFilters(hex_color="AB", set_name=None)
-        assert _count_key(EndedAuction, a) != _count_key(EndedAuction, b)
+        assert filters_key(EndedAuction, a) != filters_key(EndedAuction, b)

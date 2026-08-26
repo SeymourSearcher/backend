@@ -1,12 +1,18 @@
-"""STAT_KEYS drives sum_rankings_stats and the response schema declares the same
-nine fields. Nothing else forces the two to agree, so pin them here.
+"""STAT_KEYS names the user_stats columns, and the response schema declares the
+same nine fields. Nothing else forces the two to agree, so pin them here.
 """
+from app.models.user_stats import STAT_KEYS, UserStats
 from app.schemas.stats import RankingResponse, StatsResponse
-from app.services.stats import STAT_KEYS, get_stats, sum_rankings_stats
+from app.services.stats import get_stats
 
 
 def test_stat_keys_match_the_response_schema():
     assert set(STAT_KEYS) == set(StatsResponse.model_fields)
+
+
+def test_stat_keys_match_the_stored_columns():
+    stored = set(UserStats.__table__.columns.keys()) - {"user_id", "computed_at"}
+    assert set(STAT_KEYS) == stored
 
 
 def test_ranking_response_is_stats_plus_user_fields():
@@ -16,16 +22,3 @@ def test_ranking_response_is_stats_plus_user_fields():
 
 def test_get_stats_returns_exactly_the_declared_keys():
     assert set(get_stats([("FFFF00", 0), ("AABBCC", 1)])) == set(STAT_KEYS)
-
-
-def test_summing_rankings_adds_each_key_independently():
-    a = {key: i for i, key in enumerate(STAT_KEYS)}
-    b = {key: 10 for key in STAT_KEYS}
-
-    total = sum_rankings_stats([a, b])
-
-    assert total == {key: a[key] + b[key] for key in STAT_KEYS}
-
-
-def test_summing_no_rankings_is_all_zero():
-    assert sum_rankings_stats([]) == {key: 0 for key in STAT_KEYS}

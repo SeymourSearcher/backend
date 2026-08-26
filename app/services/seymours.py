@@ -10,15 +10,14 @@ from app.models import Seymour, User
 from app.repositories.seymour_repo import SeymourRepository
 from app.services.cache import (
     CUSTOM_SETS,
-    GLOBAL_STATS,
     HEX_INFO,
-    RANKINGS,
     SEYMOUR_FILTERS,
     SEYMOUR_RESULTS,
     USER_SEYMOURS,
     custom_sets_hash,
     invalidate_user_seymours,
 )
+from app.services.rankings import refresh_user_stats
 from app.services.compute import FADE_DYES, find_custom_sets
 from app.services.matching import list_set_names
 from app.services.parser import parse_seymour_file
@@ -170,9 +169,8 @@ async def replace_all(
     user.last_uploaded = utcnow()
     await db.commit()
 
-    await GLOBAL_STATS.invalidate(redis)
+    await refresh_user_stats(db, user.id)
     await invalidate_user_seymours(redis, user.id)
-    await RANKINGS.invalidate(redis)
     await HEX_INFO.invalidate_all(redis)
 
     return len(parsed), skipped
@@ -194,7 +192,7 @@ async def delete_one(db: AsyncSession, redis: Redis, user: User, seymour_id: int
     await seymours.remove(seymour)
     await db.commit()
 
-    await GLOBAL_STATS.invalidate(redis)
+    await refresh_user_stats(db, user.id)
     await invalidate_user_seymours(redis, user.id)
 
 
@@ -202,5 +200,5 @@ async def delete_all(db: AsyncSession, redis: Redis, user: User) -> None:
     await SeymourRepository(db).delete_for_user(user.id)
     await db.commit()
 
-    await GLOBAL_STATS.invalidate(redis)
+    await refresh_user_stats(db, user.id)
     await invalidate_user_seymours(redis, user.id)

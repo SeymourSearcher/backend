@@ -231,3 +231,74 @@ class TestCountCaching:
             assert r.json()["total"] == 30
 
         assert len(await redis.keys("auction_count:*")) == 1
+
+
+class TestStatsCaching:
+    """/auctions/stats is four full passes over the table on every request.
+
+    The cache stores the assembled payload, so the round trip through JSON has
+    to survive the nested price buckets -- that is the part most likely to
+    break silently.
+    """
+
+    async def test_a_cache_hit_returns_the_same_payload(self, client, seed, redis):
+        await seed(ended_rows(30))
+
+        first = await client.get("/auctions/stats")
+        assert len(await redis.keys("auction_stats:*")) == 1
+
+        second = await client.get("/auctions/stats")
+        assert second.json() == first.json()
+
+    async def test_price_buckets_survive_the_cache(self, client, seed, redis):
+        await seed(ended_rows(60))
+
+        fresh = (await client.get("/auctions/stats")).json()["price_distribution"]
+        cached = (await client.get("/auctions/stats")).json()["price_distribution"]
+
+        assert fresh, "expected a distribution to actually be exercised"
+        assert cached == fresh
+        for bucket in cached:
+            assert set(bucket) == {"label", "count", "min_price", "max_price"}
+
+    async def test_rows_added_behind_the_cache_do_not_change_it(self, client, seed, redis):
+        await seed(ended_rows(30))
+        assert (await client.get("/auctions/stats")).json()["total"] == 30
+
+        await seed([EndedAuction(
+            auction_id="extra", seller_uuid="s", buyer_uuid="b", price=1, is_bin=True,
+            item_uuid="i", hex_color="FF0000", piece=0, timestamp=BASE_MS,
+            target_hex_keys="FF0102", delta_e_keys=0.0, tier_keys=get_tier(0.0),
+            target_hex_all="FF0000", delta_e_all=0.0, tier_all=get_tier(0.0),
+        )])
+
+        assert (await client.get("/auctions/stats")).json()["total"] == 30
+
+    async def test_a_different_filter_gets_its_own_stats(self, client, seed, redis):
+        await seed(ended_rows(30))
+
+        everything = (await client.get("/auctions/stats")).json()["total"]
+        one_piece = (await client.get("/auctions/stats?pieces=0")).json()["total"]
+
+        assert everything == 30
+        assert one_piece < everything
+        assert len(await redis.keys("auction_stats:*")) == 2
+
+    async def test_the_empty_result_is_cacheable(self, client, seed, redis):
+        await seed(ended_rows(5))
+
+        empty = (await client.get("/auctions/stats?min_price=999999999")).json()
+        assert empty["total"] == 0
+        assert empty["price_distribution"] == []
+        assert empty["hourly_activity"] == [0] * 24
+
+        assert (await client.get("/auctions/stats?min_price=999999999")).json() == empty
+
+    async def test_stats_and_count_caches_do_not_collide(self, client, seed, redis, stub_names):
+        await seed(ended_rows(30))
+
+        await client.get("/auctions/ended?limit=5")
+        await client.get("/auctions/stats")
+
+        assert len(await redis.keys("auction_count:*")) == 1
+        assert len(await redis.keys("auction_stats:*")) == 1

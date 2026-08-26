@@ -106,9 +106,10 @@ async def list_available_sets():
 @router.get("/stats", response_model=AuctionStatsResponse)
 async def get_auction_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
     filters: Filters,
 ):
-    return AuctionStatsResponse(**await compute_auction_stats(db, filters))
+    return AuctionStatsResponse(**await compute_auction_stats(db, filters, redis=redis))
 
 
 @router.get("/active/{auction_id}", response_model=ActiveAuctionDetailResponse)

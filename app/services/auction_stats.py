@@ -5,13 +5,27 @@ no bulk transfer into Python. The percentile-trimmed price distribution selects
 rows by ROW_NUMBER() rather than by price range, which reproduces the positional
 list slicing the buckets are defined by, including when ties straddle a
 percentile boundary.
+
+Four passes over the table, ~800ms unfiltered, so the whole result is cached.
+The two ungrouped passes look mergeable into one GROUP BY hour -- summing the
+24 groups reproduces every scalar exactly -- but it was measured and the
+grouping costs back what the saved scan wins (465ms apart, 485ms merged).
+The two ROW_NUMBER passes cannot merge at all: the histogram's bucket bounds
+come out of the percentile query.
 """
+from redis.asyncio import Redis
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import EndedAuction
 from app.schemas.auction import PriceBucket
-from app.services.auction_queries import AuctionFilters, build_where, match_columns_for
+from app.services.auction_queries import (
+    AuctionFilters,
+    build_where,
+    filters_key,
+    match_columns_for,
+)
+from app.services.cache import AUCTION_STATS
 from app.services.matching import TIER_THRESHOLDS
 
 BUCKET_COUNT = 8
@@ -223,7 +237,7 @@ async def _price_stats(db: AsyncSession, where, n: int) -> tuple[float, list[Pri
     return median, buckets
 
 
-async def compute_auction_stats(db: AsyncSession, filters: AuctionFilters) -> dict:
+async def _compute(db: AsyncSession, filters: AuctionFilters) -> dict:
     where = build_where(EndedAuction, filters)
     _, _, tier_col = match_columns_for(EndedAuction, filters.include_dyes)
 
@@ -238,3 +252,33 @@ async def compute_auction_stats(db: AsyncSession, filters: AuctionFilters) -> di
         "price_distribution": buckets,
         "hourly_activity": await _hourly_activity(db, where),
     }
+
+
+def _encode(stats: dict) -> dict:
+    return {**stats, "price_distribution": [b.model_dump() for b in stats["price_distribution"]]}
+
+
+def _decode(stats: dict) -> dict:
+    return {**stats, "price_distribution": [PriceBucket(**b) for b in stats["price_distribution"]]}
+
+
+async def compute_auction_stats(
+    db: AsyncSession, filters: AuctionFilters, redis: Redis | None = None
+) -> dict:
+    """Cached on the filters, which are the only thing that changes the result.
+
+    TTL matches ENDED_SYNC_INTERVAL, so the figures are never staler than the
+    rows they describe. Buckets are converted at the cache boundary only, so a
+    hit and a miss return the same PriceBucket-shaped payload either way.
+    """
+    if redis is None:
+        return await _compute(db, filters)
+
+    key = filters_key(EndedAuction, filters)
+    cached = await AUCTION_STATS.get(redis, key)
+    if cached is not None:
+        return _decode(cached)
+
+    stats = await _compute(db, filters)
+    await AUCTION_STATS.set(redis, _encode(stats), key)
+    return stats

@@ -46,9 +46,6 @@ class CacheEntry:
                 break
 
 
-GLOBAL_STATS = CacheEntry("global_stats", 3600)
-RANKINGS = CacheEntry("rankings", 900)
-USER_STATS = CacheEntry("user_stats:", 1800)
 CUSTOM_SETS = CacheEntry("custom_sets:", 3600)
 HEX_INFO = CacheEntry("hex_info:", 1800)
 
@@ -59,6 +56,11 @@ USER_SEYMOURS = CacheEntry("user_seymours:", 60, refresh_on_read=True)
 # row -- 58ms of the auctions endpoint's 84ms. TTL matches ENDED_SYNC_INTERVAL,
 # so the number is never staler than the data behind it.
 AUCTION_COUNT = CacheEntry("auction_count:", 30)
+
+# Four full passes over ended_auctions, ~800ms unfiltered, on every request.
+# Merging the two ungrouped passes was measured and does not help; see
+# app/services/auction_stats.py.
+AUCTION_STATS = CacheEntry("auction_stats:", 30)
 
 # Results and filters deliberately share a prefix so invalidating a user's
 # seymours clears both in one scan.
@@ -74,7 +76,6 @@ def custom_sets_hash(seymour_list: list) -> str:
 async def invalidate_user_seymours(redis: Redis, user_id: int) -> None:
     await SEYMOUR_RESULTS.invalidate_all(redis, user_id, "")
     await USER_SEYMOURS.invalidate(redis, user_id)
-    await USER_STATS.invalidate(redis, user_id)
 
 
 RATE_LIMIT_PREFIX = "ratelimit:"
