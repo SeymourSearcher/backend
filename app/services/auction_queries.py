@@ -81,20 +81,26 @@ def sort_column(model, sort_by: str):
     return model.timestamp
 
 
+def match_fields(auction, include_dyes: bool) -> dict:
+    """Derived match columns shared by the auction and recent-bid payloads."""
+    target_hex = (auction.target_hex_all if include_dyes else auction.target_hex_keys) or ""
+    delta_e = auction.delta_e_all if include_dyes else auction.delta_e_keys
+    return {
+        "target_hex": target_hex,
+        "delta_e": round(delta_e, 2) if delta_e is not None else 0.0,
+        "abs_diff": compute_abs_diff(auction.hex_color.upper(), target_hex),
+        "set_name": get_name_for_hex(target_hex),
+    }
+
+
 def serialize(auction, response_cls, include_dyes: bool):
     data = {
         field: getattr(auction, field)
         for field in response_cls.model_fields
         if hasattr(auction, field)
     }
-    target_hex = auction.target_hex_all if include_dyes else auction.target_hex_keys
-    delta_e = auction.delta_e_all if include_dyes else auction.delta_e_keys
-
-    data["target_hex"] = target_hex or ""
-    data["delta_e"] = round(delta_e, 2) if delta_e is not None else 0.0
-    data["abs_diff"] = compute_abs_diff(auction.hex_color.upper(), target_hex)
-    data["tier"] = get_tier(delta_e)
-    data["set_name"] = get_name_for_hex(target_hex)
+    data.update(match_fields(auction, include_dyes))
+    data["tier"] = get_tier(auction.delta_e_all if include_dyes else auction.delta_e_keys)
     return response_cls(**data)
 
 
@@ -149,12 +155,8 @@ async def recent_bids(db: AsyncSession, limit: int, include_dyes: bool) -> list[
     rows = await AuctionRepository(db).recent_bids(limit)
     names = await get_player_names(db, list({bid.bidder_uuid for bid, _ in rows}))
 
-    bids = []
-    for bid, auction in rows:
-        target_hex = (auction.target_hex_all if include_dyes else auction.target_hex_keys) or ""
-        delta_e = auction.delta_e_all if include_dyes else auction.delta_e_keys
-
-        bids.append({
+    return [
+        {
             "auction_id": auction.auction_id,
             "bidder_uuid": bid.bidder_uuid,
             "bidder_name": names.get(bid.bidder_uuid),
@@ -162,10 +164,7 @@ async def recent_bids(db: AsyncSession, limit: int, include_dyes: bool) -> list[
             "timestamp": bid.timestamp,
             "hex_color": auction.hex_color,
             "piece": auction.piece,
-            "target_hex": target_hex,
-            "set_name": get_name_for_hex(target_hex),
-            "delta_e": round(delta_e, 2) if delta_e is not None else 0.0,
-            "abs_diff": compute_abs_diff(auction.hex_color.upper(), target_hex),
-        })
-
-    return bids
+            **match_fields(auction, include_dyes),
+        }
+        for bid, auction in rows
+    ]
