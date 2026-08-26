@@ -97,13 +97,17 @@ async def available_filters(
     return filters
 
 
-async def hex_codes(
-    db: AsyncSession, redis: Redis, user: User, with_pieces: bool
-) -> list:
+async def hex_codes(db: AsyncSession, redis: Redis, user: User) -> list[str]:
     seymours = await get_user_seymours(db, redis, user.id)
-    if with_pieces:
-        return list({(s.hex_color.upper(), s.item_name) for s in seymours})
     return list({s.hex_color.upper() for s in seymours})
+
+
+async def hex_codes_with_pieces(
+    db: AsyncSession, redis: Redis, user: User
+) -> list[tuple[str, int]]:
+    # Seymour.item_name stores the piece index, not a name -- the router types it as Piece.
+    seymours = await get_user_seymours(db, redis, user.id)
+    return list({(s.hex_color.upper(), s.item_name) for s in seymours})
 
 
 async def list_for_user(

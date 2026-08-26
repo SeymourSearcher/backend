@@ -1,5 +1,5 @@
 from typing import Annotated, Optional
-from fastapi import Depends, HTTPException, status, Request
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import JWTError, jwt
@@ -28,45 +28,45 @@ async def get_db():
         yield session
 
 
+def _discord_id_from_token(token: str) -> int | None:
+    """The token's subject, or None if the token is unsigned, expired or subjectless."""
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    except JWTError:
+        return None
+    discord_id = payload.get("sub")
+    return int(discord_id) if discord_id is not None else None
+
+
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)]
 ) -> User:
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    token = credentials.credentials
-    try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-        discord_id: str = payload.get("sub")
-        if discord_id is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-    except JWTError:
+
+    discord_id = _discord_id_from_token(credentials.credentials)
+    if discord_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
-    user = await UserRepository(db).get_by_discord_id(int(discord_id))
+    user = await UserRepository(db).get_by_discord_id(discord_id)
 
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    
+
     return user
 
 
 async def get_optional_user(
-    request: Request,
-    db: AsyncSession
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
+    db: Annotated[AsyncSession, Depends(get_db)]
 ) -> Optional[User]:
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return None
-    
-    token = auth_header[7:]
-    try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-        discord_id: str = payload.get("sub")
-        if discord_id is None:
-            return None
-    except JWTError:
+    if credentials is None:
         return None
 
-    return await UserRepository(db).get_by_discord_id(int(discord_id))
+    discord_id = _discord_id_from_token(credentials.credentials)
+    if discord_id is None:
+        return None
+
+    return await UserRepository(db).get_by_discord_id(discord_id)
 

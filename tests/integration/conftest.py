@@ -95,8 +95,12 @@ async def client(clean_db, sessionmaker, redis):
 
 @pytest.fixture
 def as_user(sessionmaker):
-    """Authenticate the shared client as a given user for the rest of the test."""
-    from app.dependencies import get_current_user
+    """Authenticate the shared client as a given user for the rest of the test.
+
+    Overrides both auth dependencies -- endpoints taking get_optional_user would
+    otherwise stay anonymous, since the client never sends a real bearer token.
+    """
+    from app.dependencies import get_current_user, get_optional_user
 
     def _login(row):
         user_id = row.id
@@ -106,6 +110,7 @@ def as_user(sessionmaker):
                 return await session.get(User, user_id)
 
         app.dependency_overrides[get_current_user] = override
+        app.dependency_overrides[get_optional_user] = override
 
     return _login
 

@@ -1,5 +1,5 @@
 from typing import Annotated, Optional
-from fastapi import APIRouter, Depends, UploadFile, File, Query, Request
+from fastapi import APIRouter, Depends, UploadFile, File, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 
@@ -15,27 +15,34 @@ router = APIRouter()
 
 @router.get("/available-filters", response_model=list[str])
 async def get_available_filters(
-    request: Request,
+    user: Annotated[Optional[User], Depends(get_optional_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
     filter: str = Query(...),
     incomplete_only: bool = Query(False),
     include_dyes: bool = Query(False)
 ):
-    user = await get_optional_user(request, db)
     return await seymours.available_filters(
         db, redis, user, filter, incomplete_only, include_dyes
     )
 
 
-@router.get("/hex-codes", response_model=list[str] | list[tuple[str, Piece]])
+@router.get("/hex-codes", response_model=list[str])
 async def get_user_hex_codes(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    redis: Annotated[Redis, Depends(get_redis)],
-    with_pieces: bool = Query(False)
+    redis: Annotated[Redis, Depends(get_redis)]
 ):
-    return await seymours.hex_codes(db, redis, user, with_pieces)
+    return await seymours.hex_codes(db, redis, user)
+
+
+@router.get("/hex-codes/with-pieces", response_model=list[tuple[str, Piece]])
+async def get_user_hex_codes_with_pieces(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)]
+):
+    return await seymours.hex_codes_with_pieces(db, redis, user)
 
 
 @router.get("/", response_model=list[SeymourWithMatchResponse])
