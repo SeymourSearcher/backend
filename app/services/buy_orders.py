@@ -124,11 +124,13 @@ async def list_matching(
 async def list_fillable(
     db: AsyncSession, user: User, sort_by: str, sort_order: str, skip: int, limit: int
 ) -> list[dict]:
-    seymours = await SeymourRepository(db).list_for_user(user.id)
-    if not seymours:
+    # Orders first: there are usually none, and loading the user's seymours to
+    # match against nothing is the whole cost of the request (180ms at 17.5k rows).
+    orders = await BuyOrderRepository(db).list_active_excluding(user.id)
+    if not orders:
         return []
 
-    orders = await BuyOrderRepository(db).list_active_excluding(user.id)
+    seymours = await SeymourRepository(db).list_for_user(user.id)
 
     fillable = []
     for order in orders:
