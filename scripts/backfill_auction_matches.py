@@ -23,6 +23,8 @@ import sys
 from sqlalchemy import text
 
 from app.database import engine
+from app.dependencies import get_redis
+from app.services import auction_cache
 from app.services.matching import match_columns
 
 logger = logging.getLogger("backfill")
@@ -90,10 +92,18 @@ async def backfill_table(conn, table: str, rewrite_all: bool) -> int:
 
 
 async def main(rewrite_all: bool) -> None:
+    updated = 0
     async with engine.connect() as conn:
         for table in ("active_auctions", "ended_auctions"):
-            await backfill_table(conn, table, rewrite_all)
+            updated += await backfill_table(conn, table, rewrite_all)
     await engine.dispose()
+
+    if updated:
+        # The auction caches are dropped by the sync loop, which has no idea
+        # this ran. Without this they hold pre-backfill tier counts for a full
+        # TTL. See app/services/auction_cache.py.
+        await auction_cache.invalidate_all(await get_redis())
+        logger.info("auction caches invalidated")
 
 
 if __name__ == "__main__":

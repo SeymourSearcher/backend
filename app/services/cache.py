@@ -19,6 +19,9 @@ class CacheEntry:
     def key(self, *parts: Any) -> str:
         return self.prefix + ":".join(str(p) for p in parts)
 
+    async def exists(self, redis: Redis, *parts: Any) -> bool:
+        return bool(await redis.exists(self.key(*parts)))
+
     async def get(self, redis: Redis, *parts: Any) -> Any | None:
         key = self.key(*parts)
         cached = await redis.get(key)
@@ -56,15 +59,20 @@ OWNER_HEXES = CacheEntry("owner_hexes", 1800)
 # Kept warm while a page is being browsed rather than expiring mid-session.
 USER_SEYMOURS = CacheEntry("user_seymours:", 60, refresh_on_read=True)
 
-# Only feeds a row-count label, but it is a full index scan of every matching
-# row -- 58ms of the auctions endpoint's 84ms. TTL matches ENDED_SYNC_INTERVAL,
-# so the number is never staler than the data behind it.
-AUCTION_COUNT = CacheEntry("auction_count:", 30)
+# Both are dropped by the sync that changes the rows they describe rather than
+# by expiry, so the TTL is a backstop and a hotness signal, not the staleness
+# bound -- see app/services/auction_cache.py. Long enough that a live key means
+# somebody is still reading it; short enough to bound a missed invalidation.
+AUCTION_TTL = 900
 
-# Four full passes over ended_auctions, ~800ms unfiltered, on every request.
-# Merging the two ungrouped passes was measured and does not help; see
+# Only feeds a row-count label, but it is a full index scan of every matching
+# row -- 58ms of the auctions endpoint's 84ms.
+AUCTION_COUNT = CacheEntry("auction_count:", AUCTION_TTL)
+
+# Four full passes over ended_auctions, ~800ms unfiltered. Merging the two
+# ungrouped passes was measured and does not help; see
 # app/services/auction_stats.py.
-AUCTION_STATS = CacheEntry("auction_stats:", 30)
+AUCTION_STATS = CacheEntry("auction_stats:", AUCTION_TTL)
 
 # Results and filters deliberately share a prefix so invalidating a user's
 # seymours clears both in one scan.

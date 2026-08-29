@@ -1,13 +1,17 @@
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import timedelta
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from sqlalchemy.dialects.mysql import insert
 
 from app.clock import utcnow
 from app.database import async_session
+from app.dependencies import get_redis
 from app.models import ActiveAuction, EndedAuction, Bid
+from app.services import auction_cache
 from app.services.matching import match_columns
 from app.services.auctions import (
     get_all_auctions,
@@ -26,9 +30,36 @@ STALE_THRESHOLD_MINUTES = 10
 BATCH_SIZE = 500
 
 
-async def upsert_active_auctions_batch(db: AsyncSession, auctions: list[SeymourAuction]):
+@dataclass(frozen=True)
+class SyncChanges:
+    """Which cached row sets a poll actually altered.
+
+    Hypixel republishes auctions_ended once a minute and we poll twice, and only
+    a couple of the ~130 auctions in it are ever Seymour pieces -- so most polls
+    write nothing, and rebuilding the caches on every one of them would be work
+    for an unchanged answer.
+    """
+
+    ended_inserted: int = 0
+    active_changed: int = 0
+
+
+async def _new_ids(db: AsyncSession, model, ids: set[str]) -> int:
+    """How many of these auction_ids the table does not already hold.
+
+    rowcount cannot answer this. SQLAlchemy's mysqldb-family dialects set
+    CLIENT_FOUND_ROWS, so an ON DUPLICATE KEY UPDATE reports the whole batch as
+    affected whether it inserted anything or not (verified on MySQL 8.4).
+    """
+    if not ids:
+        return 0
+    existing = await db.scalars(select(model.auction_id).where(model.auction_id.in_(ids)))
+    return len(ids - set(existing))
+
+
+async def upsert_active_auctions_batch(db: AsyncSession, auctions: list[SeymourAuction]) -> int:
     if not auctions:
-        return
+        return 0
 
     now = utcnow()
     matches = match_columns([a.hex_color for a in auctions])
@@ -49,6 +80,8 @@ async def upsert_active_auctions_batch(db: AsyncSession, auctions: list[SeymourA
         for a in auctions
     ]
 
+    inserted = await _new_ids(db, ActiveAuction, {a.auction_id for a in auctions})
+
     stmt = insert(ActiveAuction).values(values)
     stmt = stmt.on_duplicate_key_update(
         price=stmt.inserted.price,
@@ -56,11 +89,12 @@ async def upsert_active_auctions_batch(db: AsyncSession, auctions: list[SeymourA
         last_updated=stmt.inserted.last_updated,
     )
     await db.execute(stmt)
+    return inserted
 
 
-async def upsert_ended_auctions_batch(db: AsyncSession, auctions: list[SeymourEndedAuction]):
+async def upsert_ended_auctions_batch(db: AsyncSession, auctions: list[SeymourEndedAuction]) -> int:
     if not auctions:
-        return
+        return 0
 
     matches = match_columns([a.hex_color for a in auctions])
     values = [
@@ -79,9 +113,15 @@ async def upsert_ended_auctions_batch(db: AsyncSession, auctions: list[SeymourEn
         for a in auctions
     ]
 
+    inserted = await _new_ids(db, EndedAuction, {a.auction_id for a in auctions})
+
+    # Kept as an upsert rather than inserting only the new ids: the count above
+    # is a separate statement, so a concurrent writer would turn the gap between
+    # them into an IntegrityError.
     stmt = insert(EndedAuction).values(values)
     stmt = stmt.on_duplicate_key_update(auction_id=stmt.inserted.auction_id)
     await db.execute(stmt)
+    return inserted
 
 
 async def sync_bids_batch(db: AsyncSession, auctions: list[SeymourAuction]):
@@ -114,26 +154,27 @@ async def sync_bids_batch(db: AsyncSession, auctions: list[SeymourAuction]):
         await db.execute(insert(Bid).values(new_bids))
 
 
-async def sync_active_auctions(db: AsyncSession) -> set[str]:
+async def sync_active_auctions(db: AsyncSession) -> tuple[set[str], SyncChanges]:
     raw_auctions = await get_all_auctions()
-    
+
     parsed_auctions = []
     for raw in raw_auctions:
         parsed = parse_active_auction(raw)
         if parsed:
             parsed_auctions.append(parsed)
-    
+
     active_ids = {a.auction_id for a in parsed_auctions}
-    
+    inserted = 0
+
     for i in range(0, len(parsed_auctions), BATCH_SIZE):
         batch = parsed_auctions[i:i + BATCH_SIZE]
-        await upsert_active_auctions_batch(db, batch)
+        inserted += await upsert_active_auctions_batch(db, batch)
         await sync_bids_batch(db, batch)
-    
-    return active_ids
+
+    return active_ids, SyncChanges(active_changed=inserted)
 
 
-async def sync_ended_auctions(db: AsyncSession):
+async def sync_ended_auctions(db: AsyncSession) -> SyncChanges:
     data = await get_auctions_ended()
     raw_ended = data.get("auctions", [])
 
@@ -144,45 +185,82 @@ async def sync_ended_auctions(db: AsyncSession):
             parsed_auctions.append(parsed)
 
     ended_ids = {a.auction_id for a in parsed_auctions}
+    inserted = 0
 
     for i in range(0, len(parsed_auctions), BATCH_SIZE):
         batch = parsed_auctions[i:i + BATCH_SIZE]
-        await upsert_ended_auctions_batch(db, batch)
+        inserted += await upsert_ended_auctions_batch(db, batch)
 
+    # DELETE rowcount is the number actually removed regardless of the dialect's
+    # FOUND_ROWS flag, unlike the upserts above.
+    removed = 0
     if ended_ids:
-        await db.execute(
+        removed += (await db.execute(
             delete(ActiveAuction).where(ActiveAuction.auction_id.in_(ended_ids))
-        )
+        )).rowcount
 
     stale_cutoff = utcnow() - timedelta(minutes=STALE_THRESHOLD_MINUTES)
-    await db.execute(
+    removed += (await db.execute(
         delete(ActiveAuction).where(ActiveAuction.last_updated < stale_cutoff)
-    )
+    )).rowcount
+
+    return SyncChanges(ended_inserted=inserted, active_changed=removed)
+
+
+async def _refresh_caches(db: AsyncSession, changes: SyncChanges) -> None:
+    """Drop and rebuild whatever this poll invalidated. Best effort.
+
+    Called after the commit, never before: a cache rebuilt inside the write
+    transaction would publish rows a rollback then takes away. A failure here
+    leaves entries stale until their TTL rather than failing the sync, which
+    would drop the rows themselves.
+    """
+    if not (changes.ended_inserted or changes.active_changed):
+        return
+
+    try:
+        redis = await get_redis()
+        if changes.ended_inserted:
+            await auction_cache.refresh_ended(db, redis)
+        if changes.active_changed:
+            await auction_cache.refresh_active(db, redis)
+    except Exception as e:
+        logger.error(f"Auction cache refresh failed: {e}")
 
 
 async def run_active_sync():
     async with async_session() as db:
         try:
-            active_ids = await sync_active_auctions(db)
+            active_ids, changes = await sync_active_auctions(db)
             await db.commit()
-            logger.info(f"Active auction sync complete. {len(active_ids)} active auctions.")
-            return active_ids
         except Exception as e:
             await db.rollback()
             logger.error(f"Active auction sync failed: {e}")
             raise
 
+        await _refresh_caches(db, changes)
+        logger.info(
+            f"Active auction sync complete. {len(active_ids)} active auctions, "
+            f"{changes.active_changed} new."
+        )
+        return active_ids
+
 
 async def run_ended_sync():
     async with async_session() as db:
         try:
-            await sync_ended_auctions(db)
+            changes = await sync_ended_auctions(db)
             await db.commit()
-            logger.info("Ended auction sync complete.")
         except Exception as e:
             await db.rollback()
             logger.error(f"Ended auction sync failed: {e}")
             raise
+
+        await _refresh_caches(db, changes)
+        logger.info(
+            f"Ended auction sync complete. {changes.ended_inserted} new, "
+            f"{changes.active_changed} active removed."
+        )
 
 
 async def active_sync_loop():
