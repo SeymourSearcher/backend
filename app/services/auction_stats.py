@@ -267,9 +267,11 @@ async def compute_auction_stats(
 ) -> dict:
     """Cached on the filters, which are the only thing that changes the result.
 
-    TTL matches ENDED_SYNC_INTERVAL, so the figures are never staler than the
-    rows they describe. Buckets are converted at the cache boundary only, so a
-    hit and a miss return the same PriceBucket-shaped payload either way.
+    The entry is dropped by the sync that writes the rows it describes, so the
+    TTL is a backstop rather than the staleness bound; see
+    app/services/auction_cache.py. Buckets are converted at the cache boundary
+    only, so a hit and a miss return the same PriceBucket-shaped payload either
+    way.
     """
     if redis is None:
         return await _compute(db, filters)
