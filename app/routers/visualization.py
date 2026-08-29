@@ -8,7 +8,8 @@ from redis.asyncio import Redis
 from app.dependencies import get_redis
 from app.schemas.visualization import VisualizationRequest, VisualizationStats
 from app.services.cache import check_rate_limit
-from app.services.visualization import generate_color_mask, get_stats, generate_3d_html
+from app.services.color_index import ColorSelection
+from app.services.visualization import select_colors, get_stats, generate_3d_html
 
 router = APIRouter()
 
@@ -25,9 +26,10 @@ async def _enforce_rate_limit(
 ) -> None:
     """Limits every request that is not scoped to the caller's own Seymours.
 
-    Without input_seymours the query scans all 16.7M colours, so the unscoped
-    case is the expensive one -- it previously went unlimited because the check
-    only fired when input_hex_codes was set.
+    The unscoped case selects from all 16.7M colours, so it is the one that can
+    return a full-size point cloud however small the caller's collection is.
+    Its delta E scan is no longer what costs -- see app/services/color_index.py
+    -- but the response it produces is still the largest the API serves.
     """
     if req.input_seymours:
         return
@@ -43,9 +45,9 @@ async def _enforce_rate_limit(
         )
 
 
-async def _color_mask(req: VisualizationRequest):
+async def _select(req: VisualizationRequest) -> ColorSelection:
     return await asyncio.to_thread(
-        generate_color_mask,
+        select_colors,
         min_de=req.min_de,
         max_de=req.max_de,
         input_hex_codes=req.input_hex_codes,
@@ -63,8 +65,8 @@ async def get_visualization_stats(
     await _enforce_rate_limit(
         req, request, redis, "viz_stats", HEX_STATS_RATE_LIMIT, HEX_STATS_WINDOW
     )
-    indices, total = await _color_mask(req)
-    return get_stats(len(indices), total)
+    selection = await _select(req)
+    return get_stats(selection.count, selection.total)
 
 
 @router.post("/generate", response_class=HTMLResponse)
@@ -76,5 +78,5 @@ async def generate_visualization(
     await _enforce_rate_limit(
         req, request, redis, "viz_hex", HEX_GENERATE_RATE_LIMIT, HEX_GENERATE_WINDOW
     )
-    indices, total = await _color_mask(req)
-    return await asyncio.to_thread(generate_3d_html, indices, total, req.max_points)
+    selection = await _select(req)
+    return await asyncio.to_thread(generate_3d_html, selection, req.max_points)
