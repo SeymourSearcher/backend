@@ -17,6 +17,7 @@ The blob shape is versioned by the cache key (see OWNER_HEXES in
 app/services/cache.py) -- _decode has no tolerance for a payload written by an
 older revision.
 """
+import asyncio
 from array import array
 from base64 import b64decode, b64encode
 from typing import NamedTuple
@@ -82,11 +83,29 @@ def _decode(payload: dict) -> OwnerHexes:
     return OwnerHexes(payload["users"], idx, hexes, pieces)
 
 
+_rebuild = asyncio.Lock()
+
+
 async def get_owner_hexes(db: AsyncSession, redis: Redis) -> OwnerHexes:
+    """One rebuild at a time, because a hex page view is four requests at once.
+
+    All four call this, so a cold cache used to mean four concurrent copies of
+    the same 106k-row query -- measured at 556ms each, and they compete for the
+    connection pool while they run. The lock is per worker, so N workers can
+    still rebuild N times; that is 4x better than N*4 and needs no cross-process
+    coordination.
+    """
     cached = await OWNER_HEXES.get(redis)
     if cached is not None:
         return _decode(cached)
 
-    owners = _build(await SeymourRepository(db).list_owner_hexes())
-    await OWNER_HEXES.set(redis, _encode(owners))
-    return owners
+    async with _rebuild:
+        # Re-read inside the lock: whoever queued here wants the winner's
+        # result, not another identical query.
+        cached = await OWNER_HEXES.get(redis)
+        if cached is not None:
+            return _decode(cached)
+
+        owners = _build(await SeymourRepository(db).list_owner_hexes())
+        await OWNER_HEXES.set(redis, _encode(owners))
+        return owners

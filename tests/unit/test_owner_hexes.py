@@ -1,9 +1,14 @@
 """The snapshot is packed binary inside JSON, so a round-trip through the cache
 has to come back byte-identical or the matching pass silently scores wrong users.
 """
+import asyncio
 import json
 
-from app.services.owner_hexes import OwnerHexes, _build, _decode, _encode
+import fakeredis.aioredis
+import pytest
+
+from app.services import owner_hexes
+from app.services.owner_hexes import OwnerHexes, _build, _decode, _encode, get_owner_hexes
 
 ROWS = [
     (7, "exact", 11, None, "FFFF00", 0),
@@ -56,3 +61,49 @@ def test_lowercase_hex_survives_as_the_same_colour():
 
     assert list(owners.hexes) == [0xFFFF00]
     assert f"{owners.hexes[0]:06X}" == "FFFF00"
+
+
+class TestSingleFlight:
+    """A hex page view is four requests firing together, and all four land here.
+
+    Without the lock a cold cache meant four copies of the same whole-table
+    query: measured at 556ms each over 106k rows, 2.4s for the page against
+    0.6s sequential. See tests/bench/bench_endpoints.py.
+    """
+
+    @pytest.fixture
+    def counting_repo(self, monkeypatch):
+        calls = []
+
+        class Repo:
+            def __init__(self, session):
+                pass
+
+            async def list_owner_hexes(self):
+                calls.append(1)
+                # Long enough that the other callers are definitely queued
+                # behind this one rather than finishing first by luck.
+                await asyncio.sleep(0.05)
+                return ROWS
+
+        monkeypatch.setattr(owner_hexes, "SeymourRepository", Repo)
+        return calls
+
+    async def test_concurrent_callers_share_one_rebuild(self, counting_repo):
+        redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+        results = await asyncio.gather(*(get_owner_hexes(None, redis) for _ in range(4)))
+
+        assert len(counting_repo) == 1
+        assert all(list(r.hexes) == [0xFFFF00, 0x000000, 0xFFFE00] for r in results)
+        await redis.aclose()
+
+    async def test_a_later_caller_reads_the_cache_rather_than_the_lock(self, counting_repo):
+        """The queued callers must not each re-run the query once they wake."""
+        redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+        await get_owner_hexes(None, redis)
+        await get_owner_hexes(None, redis)
+
+        assert len(counting_repo) == 1
+        await redis.aclose()
