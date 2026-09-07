@@ -7,6 +7,7 @@ and skips rows unless the query carries a tiebreaker.
 """
 import pytest
 
+from app.clock import utcnow_ms
 from app.models import ActiveAuction, EndedAuction
 from app.services.matching import get_tier
 
@@ -37,6 +38,63 @@ async def seed(db):
         await db.commit()
         return rows
     return _seed
+
+
+class TestTopSales:
+    """The homepage ticker. A rolling window, so the rows have to be stamped
+    against the real clock rather than the fixed BASE_MS the other tests use."""
+
+    @staticmethod
+    def recent(price, *, hours_ago, auction_id):
+        return EndedAuction(
+            auction_id=auction_id, seller_uuid="s", buyer_uuid="b",
+            price=price, is_bin=True, item_uuid=auction_id,
+            hex_color="FF0000", piece=0,
+            timestamp=utcnow_ms() - int(hours_ago * 3_600_000),
+            target_hex_keys="FF0000", delta_e_keys=0.0, tier_keys="t1",
+            target_hex_all="FF0000", delta_e_all=0.0, tier_all="t1",
+        )
+
+    async def test_the_dearest_sale_leads(self, client, seed):
+        await seed([
+            self.recent(500, hours_ago=1, auction_id="cheap"),
+            self.recent(9_000, hours_ago=2, auction_id="dear"),
+            self.recent(3_000, hours_ago=3, auction_id="mid"),
+        ])
+        prices = [s["price"] for s in (await client.get("/auctions/top-sales")).json()]
+
+        assert prices == [9_000, 3_000, 500]
+
+    async def test_a_sale_older_than_the_window_is_left_out(self, client, seed):
+        """Price alone would put it first; the window is what keeps it out."""
+        await seed([
+            self.recent(100, hours_ago=1, auction_id="today"),
+            self.recent(99_999, hours_ago=30, auction_id="yesterday"),
+        ])
+        body = (await client.get("/auctions/top-sales")).json()
+
+        assert [s["auction_id"] for s in body] == ["today"]
+
+    async def test_widening_the_window_lets_it_back_in(self, client, seed):
+        await seed([
+            self.recent(100, hours_ago=1, auction_id="today"),
+            self.recent(99_999, hours_ago=30, auction_id="yesterday"),
+        ])
+        body = (await client.get("/auctions/top-sales", params={"hours": 48})).json()
+
+        assert [s["auction_id"] for s in body] == ["yesterday", "today"]
+
+    async def test_the_limit_truncates_from_the_top(self, client, seed):
+        await seed([self.recent(100 * i, hours_ago=1, auction_id=f"t{i}") for i in range(1, 6)])
+        body = (await client.get("/auctions/top-sales", params={"limit": 2})).json()
+
+        assert [s["price"] for s in body] == [500, 400]
+
+    async def test_an_empty_table_is_an_empty_list_not_an_error(self, client):
+        response = await client.get("/auctions/top-sales")
+
+        assert response.status_code == 200
+        assert response.json() == []
 
 
 async def test_total_is_the_full_count_not_the_page(client, seed):

@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 
 from app.pieces import Piece
-from app.schemas.auction import AuctionStatsResponse
+from app.schemas.auction import AuctionStatsResponse, EndedAuctionResponse
 from app.schemas.common import PublicUser
 
 
@@ -62,15 +62,32 @@ class HexOwnersResponse(BaseModel):
     items: list[HexOwnerMatch]
 
 
-class HexAuctionStatsResponse(AuctionStatsResponse):
-    """Sale statistics for the colour a search resolves to.
+class HexReference(BaseModel):
+    """Which colour and band a hex search resolved to.
 
     target_hex is null only when nothing in the catalog matched at all.
     search_tier is the band the searched colour earns -- null past the last
-    tier -- and is what the default view prices. tier is the band actually
-    priced, which is null when every tier was asked for.
+    tier -- and is what the default view uses. tier is the band actually
+    applied, which is null when every tier was asked for.
     """
     target_name: str | None
     target_hex: str | None
     search_tier: str | None
     tier: str | None
+
+
+class HexAuctionStatsResponse(HexReference, AuctionStatsResponse):
+    """Sale statistics for the colour a search resolves to."""
+
+
+class HexSaleResponse(EndedAuctionResponse):
+    # Distance from the *searched* hex to this auction's actual colour. The
+    # inherited delta_e measures something else: that colour to its own catalog
+    # target.
+    search_delta_e: float
+
+
+class HexSalesResponse(HexReference):
+    """The sales HexAuctionStatsResponse aggregates, newest first."""
+    total: int
+    items: list[HexSaleResponse]

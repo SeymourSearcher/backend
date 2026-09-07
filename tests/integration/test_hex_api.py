@@ -4,10 +4,12 @@ Had no coverage: neither the endpoint, nor HexInfoResponse, nor the pass that
 walks every user's inventory. FFFF00 is an exact Pure Yellow colour, so the top
 match is deterministic; FFFE00 sits at ΔE 0.57 from it and 000000 at 137.
 """
+import numpy as np
 import pytest
 
-from app.models import Seymour, User
+from app.models import EndedAuction, Seymour, User
 from app.pieces import Piece
+from app.services.compute import ALL_LAB, KEY_ITEM_TREE
 from app.services.matching import get_tier
 
 pytestmark = pytest.mark.integration
@@ -28,6 +30,59 @@ async def owners(db):
         await db.flush()
         db.add(Seymour(user_id=user.id, item_name=Piece.HELMET, hex_color=hex_color))
     await db.commit()
+
+
+SALE_BASE_MS = 1_700_000_000_000
+
+
+def _colour_past_every_band() -> str:
+    """The colour furthest from any catalog target, found rather than pinned.
+
+    A hardcoded hex is how this test lies: the catalog grows, the colour quietly
+    lands inside a band, and the assertion below starts proving nothing. 7F00FF
+    looks lonely and is a t1 match. Coarse grid because the exact worst point
+    does not matter -- only that it clears the last tier by a wide margin.
+    """
+    step = np.arange(0, 256, 16, dtype=np.uint32)
+    grid = (
+        step[:, None, None] * 65536 + step[None, :, None] * 256 + step[None, None, :]
+    ).ravel()
+    # include_dyes defaults off on the hex endpoints, so this is the tree they use.
+    dists, _ = KEY_ITEM_TREE.query(ALL_LAB[grid], k=1)
+    return f"{int(grid[dists.argmax()]):06X}"
+
+
+FAR_HEX = _colour_past_every_band()
+
+
+@pytest.fixture
+async def sales(db):
+    """Four sales of TARGET, two of them at a colour that is not TARGET itself.
+
+    delta_e_keys is set apart from the distance to the searched hex on purpose:
+    the row's own figure measures its colour against its catalog target, and the
+    endpoint has to report the other one.
+    """
+    rows = [
+        ("e1", "FFFF00", 1_000, 0.0, "t1", 3),
+        ("e2", "FFFE00", 2_000, 1.5, "t1", 2),
+        ("e3", "FFF700", 3_000, 3.0, "t2", 1),
+        ("e4", "FFFF00", 4_000, 0.0, "t1", 0),
+    ]
+    db.add_all([
+        EndedAuction(
+            auction_id=aid,
+            seller_uuid="s", buyer_uuid="b",
+            price=price, is_bin=False, item_uuid=aid,
+            hex_color=hex_color, piece=Piece.HELMET,
+            timestamp=SALE_BASE_MS + age * 3_600_000,
+            target_hex_keys=TARGET, delta_e_keys=de, tier_keys=tier,
+            target_hex_all=TARGET, delta_e_all=de, tier_all=tier,
+        )
+        for aid, hex_color, price, de, tier, age in rows
+    ])
+    await db.commit()
+    return rows
 
 
 async def test_a_catalog_colour_is_reported_as_an_exact_match(client, owners):
@@ -176,6 +231,77 @@ class TestAuctionStats:
 
     async def test_an_unknown_tier_is_rejected(self, client):
         assert (await client.get(f"/hex/{TARGET}/auction-stats?tier=t9")).status_code == 422
+
+
+class TestRecentSales:
+    """The list under the auction stats. Same reference, same band, so the rows
+    are the ones the figures above them were computed from."""
+
+    async def test_it_lists_the_sales_the_stats_counted(self, client, owners, sales):
+        stats = (await client.get(f"/hex/{TARGET}/auction-stats")).json()
+        body = (await client.get(f"/hex/{TARGET}/sales")).json()
+
+        assert body["target_hex"] == stats["target_hex"]
+        assert body["tier"] == stats["tier"]
+        assert body["total"] == stats["total"]
+
+    async def test_rows_come_back_newest_first(self, client, owners, sales):
+        stamps = [s["timestamp"] for s in (await client.get(f"/hex/{TARGET}/sales")).json()["items"]]
+
+        assert stamps == sorted(stamps, reverse=True)
+
+    async def test_search_delta_e_measures_from_the_searched_hex(self, client, owners, sales):
+        """Not the row's own delta_e, which is the distance to its catalog
+        target -- a different question with a different answer."""
+        items = (await client.get(f"/hex/{TARGET}/sales")).json()["items"]
+        by_colour = {s["hex_color"]: s for s in items}
+
+        assert by_colour["FFFF00"]["search_delta_e"] == 0.0
+        near = by_colour["FFFE00"]
+        assert 0 < near["search_delta_e"] < 1
+        assert near["search_delta_e"] != near["delta_e"]
+
+    async def test_the_limit_caps_the_page_but_not_the_count(self, client, owners, sales):
+        """total describes the band, not the page -- it is what the caption that
+        offers to show more has to count against."""
+        full = (await client.get(f"/hex/{TARGET}/sales")).json()
+        one = (await client.get(f"/hex/{TARGET}/sales?limit=1")).json()
+
+        assert len(full["items"]) > 1
+        assert len(one["items"]) == 1
+        assert one["total"] == full["total"] == len(full["items"])
+
+    @pytest.mark.parametrize("tier", ["t1", "t2"])
+    async def test_the_band_filters_the_list_and_the_stats_alike(
+        self, client, owners, sales, tier
+    ):
+        stats = (await client.get(f"/hex/{TARGET}/auction-stats?tier={tier}")).json()
+        body = (await client.get(f"/hex/{TARGET}/sales?tier={tier}")).json()
+
+        assert body["tier"] == tier
+        assert body["total"] == stats["total"]
+        assert all(s["tier"] == tier for s in body["items"])
+
+    async def test_a_colour_past_every_band_lists_nothing_rather_than_everything(
+        self, client, owners, sales
+    ):
+        """With no band to default to, dropping the predicate would quote sales
+        of a colour the search never resolved to."""
+        body = (await client.get(f"/hex/{FAR_HEX}/sales")).json()
+
+        assert body["search_tier"] is None, f"{FAR_HEX} landed in a band after all"
+        assert body["tier"] is None
+        assert body["items"] == []
+
+    async def test_naming_a_tier_reaches_sales_that_colour_cannot_default_to(
+        self, client, owners, sales
+    ):
+        """The override is the only way past the previous case, so it has to
+        still select rows there."""
+        body = (await client.get(f"/hex/{FAR_HEX}/sales?tier=t1")).json()
+
+        assert body["tier"] == "t1"
+        assert body["search_tier"] is None
 
 
 class TestPieceFilter:

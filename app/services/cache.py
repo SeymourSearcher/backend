@@ -82,6 +82,10 @@ AUCTION_COUNT = CacheEntry("auction_count:", AUCTION_TTL)
 # app/services/auction_stats.py.
 AUCTION_STATS = CacheEntry("auction_stats:", AUCTION_TTL)
 
+# The homepage ticker's row set. Keyed by window rather than by request, so it
+# survives across visitors; see app/services/top_sales.py.
+TOP_SALES = CacheEntry("top_sales:", AUCTION_TTL)
+
 # Median sale price per catalog colour, for the hex page. Shares the auction
 # TTL, not the hex ones: it goes stale when auctions sync, not when somebody
 # uploads seymours.

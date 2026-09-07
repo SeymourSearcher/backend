@@ -5,12 +5,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db, get_redis
 from app.pieces import parse_pieces
-from app.schemas.hex import HexAuctionStatsResponse, HexInfoResponse, HexOwnersResponse
-from app.services.hex_info import get_hex_auction_stats, get_hex_info, get_hex_owners
+from app.schemas.hex import (
+    HexAuctionStatsResponse,
+    HexInfoResponse,
+    HexOwnersResponse,
+    HexSalesResponse,
+)
+from app.services.hex_info import (
+    get_hex_auction_stats,
+    get_hex_info,
+    get_hex_owners,
+    get_hex_sales,
+)
 
 router = APIRouter()
 
 PiecesParam = Annotated[str | None, Query(description="Comma-separated piece indices, 0-3")]
+TierParam = Annotated[Literal["t1", "t2", "t3", "all"] | None, Query()]
 
 
 @router.get("/{hex_code}", response_model=HexInfoResponse)
@@ -31,10 +42,26 @@ async def hex_auction_stats(
     redis: Annotated[Redis, Depends(get_redis)],
     include_dyes: bool = False,
     pieces: PiecesParam = None,
-    tier: Literal["t1", "t2", "t3", "all"] | None = Query(None),
+    tier: TierParam = None,
 ):
     return await get_hex_auction_stats(
         db, redis, hex_code, include_dyes, parse_pieces(pieces), tier
+    )
+
+
+@router.get("/{hex_code}/sales", response_model=HexSalesResponse)
+async def hex_sales(
+    hex_code: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+    include_dyes: bool = False,
+    pieces: PiecesParam = None,
+    tier: TierParam = None,
+    limit: int = Query(8, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+):
+    return await get_hex_sales(
+        db, redis, hex_code, include_dyes, parse_pieces(pieces), tier, limit, offset
     )
 
 

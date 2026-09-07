@@ -5,7 +5,9 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import InvalidInputError
-from app.services.auction_queries import AuctionFilters
+from app.models import EndedAuction
+from app.schemas.auction import EndedAuctionResponse
+from app.services.auction_queries import AuctionFilters, attach_names, list_auctions
 from app.services.auction_stats import compute_auction_stats
 from app.services.cache import HEX_INFO, OWNER_MATCHES
 from app.services.owner_hexes import get_owner_hexes
@@ -14,7 +16,7 @@ from app.services.owner_matches import (
     find_owner_matches,
     tier_users,
 )
-from app.services.compute import ITEM_TO_INFO, find_top_hex_matches
+from app.services.compute import ITEM_TO_INFO, delta_e, find_top_hex_matches, get_lab
 from app.services.hex_prices import price_estimates
 from app.pieces import Piece
 from app.services.matching import (
@@ -143,23 +145,28 @@ def _empty_stats() -> dict:
 ALL_TIERS = "all"
 
 
-async def get_hex_auction_stats(
+async def _resolve_reference(
     db: AsyncSession,
     redis: Redis,
     hex_code: str,
     include_dyes: bool,
     pieces: list[int] | None,
-    tier: str | None = None,
-) -> dict:
-    """Sale statistics for the colour a search resolves to.
+    tier: str | None,
+) -> tuple[dict, AuctionFilters | None]:
+    """The colour a search prices, and the filter isolating that colour's sales.
 
-    Same reference the hero prices -- the exact catalog colour when there is
-    one, otherwise the nearest -- so the section elaborates on the headline
-    figure rather than quoting a different one.
+    The reference is the one the hero prices -- the exact catalog colour when
+    there is one, otherwise the nearest -- so everything built on this describes
+    the headline figure rather than quoting a different one.
 
-    tier overrides which band is priced: a tier key to inspect another one, or
+    tier overrides which band is used: a tier key to inspect another one, or
     ALL_TIERS for the item's whole range. Left unset it follows the searched
     colour, which is what makes the default agree with the hero.
+
+    The filter is None when there is nothing to select. Past the last tier there
+    is no band to default to, and quietly dropping the predicate would widen the
+    result to every sale of the item; choosing a tier explicitly is still
+    honoured.
     """
     info = await get_hex_info(db, redis, hex_code, include_dyes, pieces)
     reference = info["exact_match"] or next(iter(info["top_matches"]), None)
@@ -173,19 +180,76 @@ async def get_hex_auction_stats(
         "tier": applied,
     }
 
-    # Past the last tier there is no band to default to, and quietly dropping
-    # the filter would quote every sale of the item instead. Choosing a tier
-    # explicitly is still honoured.
     if reference is None or (tier is None and applied is None):
-        return {**context, **_empty_stats()}
+        return context, None
 
-    filters = AuctionFilters(
+    return context, AuctionFilters(
         target_hex=reference["target_hex"],
         tier=applied,
         pieces=pieces,
         include_dyes=include_dyes,
     )
+
+
+async def get_hex_auction_stats(
+    db: AsyncSession,
+    redis: Redis,
+    hex_code: str,
+    include_dyes: bool,
+    pieces: list[int] | None,
+    tier: str | None = None,
+) -> dict:
+    """Sale statistics for the colour a search resolves to. See _resolve_reference."""
+    context, filters = await _resolve_reference(
+        db, redis, hex_code, include_dyes, pieces, tier
+    )
+    if filters is None:
+        return {**context, **_empty_stats()}
+
     return {**context, **await compute_auction_stats(db, filters, redis=redis)}
+
+
+async def get_hex_sales(
+    db: AsyncSession,
+    redis: Redis,
+    hex_code: str,
+    include_dyes: bool,
+    pieces: list[int] | None,
+    tier: str | None,
+    limit: int,
+    offset: int,
+) -> dict:
+    """The individual sales behind get_hex_auction_stats, newest first.
+
+    Same reference and same band, so these rows are the ones the median above
+    them was computed from. Each carries search_delta_e -- how far that
+    auction's actual colour sat from the *searched* hex, which the row's own
+    delta_e (measured to its catalog target) does not answer.
+    """
+    hex_code = validate_hex(hex_code)
+    context, filters = await _resolve_reference(
+        db, redis, hex_code, include_dyes, pieces, tier
+    )
+    if filters is None:
+        return {**context, "total": 0, "items": []}
+
+    auctions, total = await list_auctions(
+        db, EndedAuction, EndedAuctionResponse, filters,
+        "timestamp", "desc", offset, limit, redis=redis,
+    )
+    await attach_names(db, auctions, "seller_uuid", "buyer_uuid")
+
+    search_lab = get_lab(hex_code)
+    items = [
+        {
+            **auction.model_dump(),
+            "search_delta_e": round(
+                float(delta_e(search_lab, get_lab(auction.hex_color.upper()))), 2
+            ),
+        }
+        for auction in auctions
+    ]
+    return {**context, "total": total, "items": items}
 
 
 async def get_hex_owners(

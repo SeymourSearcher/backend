@@ -24,6 +24,7 @@ from app.services.auction_queries import (
 from app.pieces import parse_pieces
 from app.services.auction_stats import compute_auction_stats
 from app.services.matching import list_set_names
+from app.services.top_sales import TOP_COUNT, WINDOW_HOURS, get_top_sales
 
 router = APIRouter()
 
@@ -96,6 +97,17 @@ async def list_recent_bids(
     include_dyes: bool = Query(True),
 ):
     return await recent_bids(db, limit, include_dyes)
+
+
+@router.get("/top-sales", response_model=list[EndedAuctionResponse])
+async def list_top_sales(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+    hours: int = Query(WINDOW_HOURS, ge=1, le=168),
+    limit: int = Query(TOP_COUNT, ge=1, le=100),
+    include_dyes: bool = Query(True),
+):
+    return await get_top_sales(db, redis, hours, limit, include_dyes)
 
 
 @router.get("/sets", response_model=list[str])

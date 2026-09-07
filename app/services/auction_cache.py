@@ -23,7 +23,13 @@ from app.services.auction_queries import (
     filters_key,
 )
 from app.services.auction_stats import compute_auction_stats
-from app.services.cache import AUCTION_COUNT, AUCTION_STATS, HEX_PRICES, CacheEntry
+from app.services.cache import (
+    AUCTION_COUNT,
+    AUCTION_STATS,
+    HEX_PRICES,
+    TOP_SALES,
+    CacheEntry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +56,7 @@ async def refresh_ended(db: AsyncSession, redis: Redis) -> None:
     await AUCTION_STATS.invalidate_all(redis)
     await AUCTION_COUNT.invalidate_all(redis, _table_prefix(EndedAuction))
     await HEX_PRICES.invalidate_all(redis)
+    await TOP_SALES.invalidate_all(redis)
 
     for filters in hot_stats:
         await compute_auction_stats(db, filters, redis=redis)
@@ -71,3 +78,4 @@ async def invalidate_all(redis: Redis) -> None:
     """Every auction cache entry, for writers outside the sync loop."""
     await AUCTION_STATS.invalidate_all(redis)
     await AUCTION_COUNT.invalidate_all(redis)
+    await TOP_SALES.invalidate_all(redis)
