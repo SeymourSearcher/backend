@@ -43,7 +43,11 @@ HAND_BUILT_EXPECTED = [
 
 
 def make_inventory(n: int, seed: int = 0) -> list[tuple[str, int]]:
-    """Jittered around real target hexes, so matches land the way real data does."""
+    """Jittered around real target hexes, so matches land the way real data does.
+
+    Seeded off KEY_ITEM_HEXES, so a catalog sync reshuffles it -- re-pin the
+    seeded expectations from a --docker run, not the host interpreter.
+    """
     rng = np.random.default_rng(seed)
     targets = [h for h, _ in KEY_ITEM_HEXES]
 
@@ -80,11 +84,17 @@ def test_seeded_inventory_output_is_unchanged():
     result = find_custom_sets(make_inventory(400, seed=7), max_avg_delta_e=1.0)
 
     assert_matches(result, [
-        ("Custom Set #1", 0.15099263191223145, [
-            (0, "01FF03", 0.06304223090410233),
-            (1, "00FF00", 0.1842292845249176),
-            (2, "01FF05", 0.21022845804691315),
-            (3, "06FF01", 0.1464705467224121),
+        ("Custom Set #1", 0.780685305595398, [
+            (0, "000003", 0.3470931351184845),
+            (1, "010305", 1.0258095264434814),
+            (2, "030003", 0.7226572632789612),
+            (3, "010006", 1.0271812677383423),
+        ]),
+        ("Custom Set #2", 0.9833168983459473, [
+            (0, "25F5E7", 1.483636498451233),
+            (1, "23F3E7", 0.47035670280456543),
+            (2, "2FF0E4", 1.1541125774383545),
+            (3, "2CF2E7", 0.8251618146896362),
         ]),
     ])
 

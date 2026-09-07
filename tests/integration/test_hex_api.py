@@ -1,7 +1,7 @@
 """GET /hex/{hex_code} and GET /hex/{hex_code}/owners.
 
 Had no coverage: neither the endpoint, nor HexInfoResponse, nor the pass that
-walks every user's inventory. FFFF00 is an exact Farm Suit colour, so the top
+walks every user's inventory. FFFF00 is an exact Pure Yellow colour, so the top
 match is deterministic; FFFE00 sits at ΔE 0.57 from it and 000000 at 137.
 """
 import pytest
@@ -36,7 +36,7 @@ async def test_a_catalog_colour_is_reported_as_an_exact_match(client, owners):
     assert body["hex_code"] == TARGET
     exact = body["exact_match"]
     assert exact["target_hex"] == TARGET
-    assert exact["target_name"] == "Farm Suit"
+    assert exact["target_name"] == "Pure Yellow"
     assert exact["delta_e"] == 0.0
     assert exact["pieces"] == [0, 1, 2, 3]
 
@@ -94,7 +94,7 @@ class TestAuctionStats:
         body = (await client.get(f"/hex/{TARGET}/auction-stats")).json()
 
         assert body["target_hex"] == TARGET
-        assert body["target_name"] == "Farm Suit"
+        assert body["target_name"] == "Pure Yellow"
         assert body["tier"] == "t1"
 
     async def test_an_empty_table_reports_zeroes_not_an_error(self, client, owners):

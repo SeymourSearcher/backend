@@ -36,8 +36,17 @@ eg 4 letter, repeat
 2-4.999 t2
 5-9.999 t3
 
-list of all sets
-https://github.com/Schnerry/SeymourAnalyzerFabric/blob/11bc69bdfde5af5928478cec5bb5d48dab858fe9/src/main/resources/data/seymouranalyzer/checklistdata.json
+## Catalog
+
+`app/static/data.json` mirrors the SeymourAnalyzer mod's checklist -- it is the
+maintained list of Seymour target colours, so we take its names, hexes,
+categories and page order rather than curating our own.
+https://github.com/Schnerry/SeymourAnalyzerFabric
+
+Resync with `scripts/sync_checklist.py` (bump `UPSTREAM_REF` first); it prints
+the follow-up steps. `sets` is ours, not upstream's, and is carried across
+renames rather than regenerated -- new upstream items are reported, not
+auto-assigned.
 
 needed things to display
 landing page - show dashboard at slight tilt
