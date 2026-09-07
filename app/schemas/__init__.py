@@ -1,6 +1,13 @@
 from app.schemas.auth import DiscordCallback, TokenResponse
 from app.schemas.user import UserResponse
-from app.schemas.seymour import SeymourCreate, SeymourResponse, UploadResponse, SeymourWithMatchResponse, MatchInfo
+from app.schemas.seymour import (
+    MatchInfo,
+    RemovalResponse,
+    SeymourCreate,
+    SeymourResponse,
+    SeymourWithMatchResponse,
+    UploadResponse,
+)
 from app.schemas.marketplace import (
     BuyOrderCreate,
     BuyOrderResponse,
@@ -18,6 +25,7 @@ __all__ = [
     "SeymourCreate",
     "SeymourResponse",
     "UploadResponse",
+    "RemovalResponse",
     "SeymourWithMatchResponse",
     "MatchInfo",
     "BuyOrderCreate",

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clock import utcnow
 from app.errors import InvalidInputError, NotFoundError
 from app.models import Seymour, User
+from app.repositories.marketplace_repo import SellOrderRepository
 from app.repositories.seymour_repo import SeymourRepository
 from app.services.cache import (
     CUSTOM_SETS,
@@ -197,10 +198,25 @@ async def delete_one(db: AsyncSession, redis: Redis, user: User, seymour_id: int
     await invalidate_hex_pages(redis)
 
 
-async def delete_all(db: AsyncSession, redis: Redis, user: User) -> None:
-    await SeymourRepository(db).delete_for_user(user.id)
+async def delete_all(db: AsyncSession, redis: Redis, user: User) -> dict:
+    """Undo an upload: every Seymour this user owns, and what derives from them.
+
+    refresh_user_stats handles the rest -- it drops the leaderboard row and the
+    featured sets when the collection comes back empty.
+    """
+    # Counted before the delete, not after: sell_orders.seymour_id cascades in
+    # MySQL, so by the time this returns the listings are already gone and
+    # nothing is left to count.
+    cancelled = await SellOrderRepository(db).count_active_for_user(user.id)
+    removed = await SeymourRepository(db).delete_for_user(user.id)
+
+    # There is no uploaded file any more; leaving the stamp would date one that
+    # no longer exists.
+    user.last_uploaded = None
     await db.commit()
 
     await refresh_user_stats(db, user.id)
     await invalidate_user_seymours(redis, user.id)
     await invalidate_hex_pages(redis)
+
+    return {"removed": removed, "sell_orders_cancelled": cancelled}

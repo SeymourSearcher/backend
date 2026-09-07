@@ -33,3 +33,13 @@ class SeymourWithMatchResponse(SeymourBrief):
 class UploadResponse(BaseModel):
     imported: int
     skipped: int
+
+
+class RemovalResponse(BaseModel):
+    """What clearing a collection actually took with it.
+
+    sell_orders_cancelled is reported because it is the part nobody expects:
+    the listings go by FK cascade, not by anything the caller asked for.
+    """
+    removed: int
+    sell_orders_cancelled: int

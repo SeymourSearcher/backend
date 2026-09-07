@@ -14,7 +14,8 @@ import os
 
 import httpx
 import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -94,20 +95,25 @@ async def client(clean_db, sessionmaker, redis):
 
 
 @pytest.fixture
-def as_user(sessionmaker):
+def as_user():
     """Authenticate the shared client as a given user for the rest of the test.
 
     Overrides both auth dependencies -- endpoints taking get_optional_user would
     otherwise stay anonymous, since the client never sends a real bearer token.
+
+    The user is loaded from the request's own session, via the same get_db the
+    endpoint gets. Opening a private session here instead would hand handlers a
+    User attached to nothing they commit, so a handler that writes to it -- as
+    upload and removal both do to last_uploaded -- would silently drop the write
+    in tests while working in production.
     """
     from app.dependencies import get_current_user, get_optional_user
 
     def _login(row):
         user_id = row.id
 
-        async def override():
-            async with sessionmaker() as session:
-                return await session.get(User, user_id)
+        async def override(db: AsyncSession = Depends(get_db)):
+            return await db.get(User, user_id)
 
         app.dependency_overrides[get_current_user] = override
         app.dependency_overrides[get_optional_user] = override

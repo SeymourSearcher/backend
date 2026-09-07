@@ -269,6 +269,20 @@ class SellOrderRepository(BaseRepository):
             )
         ).scalar_one_or_none()
 
+    async def count_active_for_user(self, user_id: int) -> int:
+        """Listings that would be lost if this user's Seymours went.
+
+        sell_orders.seymour_id cascades on delete, so wiping a collection takes
+        its listings with it -- silently, in MySQL, where nothing here can count
+        them afterwards.
+        """
+        return await self.session.scalar(
+            select(func.count())
+            .select_from(SellOrder)
+            .where(SellOrder.user_id == user_id)
+            .where(status_filter(SellOrder, OrderStatus.ACTIVE))
+        ) or 0
+
     async def listed_seymour_ids(self, seymour_ids: list[int]) -> set[int]:
         rows = await self.session.execute(
             select(SellOrder.seymour_id)

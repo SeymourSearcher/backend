@@ -6,7 +6,12 @@ from redis.asyncio import Redis
 from app.dependencies import get_db, get_current_user, get_redis, get_optional_user
 from app.pieces import Piece
 from app.schemas.common import DetailResponse
-from app.schemas import SeymourResponse, UploadResponse, SeymourWithMatchResponse
+from app.schemas import (
+    RemovalResponse,
+    SeymourResponse,
+    SeymourWithMatchResponse,
+    UploadResponse,
+)
 from app.services import seymours
 from app.models import User
 
@@ -96,11 +101,10 @@ async def delete_seymour(
     return {"detail": "Deleted"}
 
 
-@router.delete("/", response_model=DetailResponse)
+@router.delete("/", response_model=RemovalResponse)
 async def delete_all_seymours(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)]
 ):
-    await seymours.delete_all(db, redis, user)
-    return {"detail": "All seymours deleted"}
+    return await seymours.delete_all(db, redis, user)

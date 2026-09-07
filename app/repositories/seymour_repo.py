@@ -27,8 +27,11 @@ class SeymourRepository(BaseRepository):
         )
         return list(rows.all())
 
-    async def delete_for_user(self, user_id: int) -> None:
-        await self.session.execute(delete(Seymour).where(Seymour.user_id == user_id))
+    async def delete_for_user(self, user_id: int) -> int:
+        """Returns how many rows went. A bulk DELETE reports its own rowcount,
+        so counting first would be a second query for the same number."""
+        result = await self.session.execute(delete(Seymour).where(Seymour.user_id == user_id))
+        return result.rowcount
 
     async def remove(self, seymour: Seymour) -> None:
         await self.session.delete(seymour)
