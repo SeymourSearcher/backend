@@ -34,4 +34,8 @@ EXPOSE 8000
 # to it mid-boot -- a 502 on every deploy. python:slim has no curl/wget, hence urllib.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers or every request looks like it came from traefik and the per-IP
+# rate limits become one shared bucket. Trusting all forwarders is only safe
+# because nothing reaches this container except through traefik.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--proxy-headers", "--forwarded-allow-ips", "*"]

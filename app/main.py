@@ -36,6 +36,24 @@ async def handle_domain_error(request: Request, exc: DomainError) -> JSONRespons
     return JSONResponse(status_code=status, content={"detail": str(exc)})
 
 
+# The one HTML body the API returns -- the colour cube -- is fetched as text and
+# saved as a file by the client, never rendered from this origin, so the policy
+# can stay at default-src 'none' without breaking it.
+SECURITY_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.update(SECURITY_HEADERS)
+    return response
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_url],

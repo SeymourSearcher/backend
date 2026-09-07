@@ -1,48 +1,34 @@
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from redis.asyncio import Redis
 
-from app.dependencies import get_redis
+from app.dependencies import RateLimit, enforce_rate_limit, get_redis
 from app.schemas.visualization import VisualizationRequest, VisualizationStats
-from app.services.cache import check_rate_limit
 from app.services.color_index import ColorSelection
 from app.services.visualization import select_colors, get_stats, generate_3d_html
 
 router = APIRouter()
 
-HEX_GENERATE_RATE_LIMIT = 2
-HEX_GENERATE_WINDOW = 300
+# Both branches are limited; the unscoped one harder. It selects from all 16.7M
+# colours, so it returns a full-size point cloud however small the caller's
+# collection is -- the largest response the API serves. Its delta E scan is no
+# longer what costs, see app/services/color_index.py, but the payload still is.
+# The scoped branch is bounded by MAX_INPUTS, so it only needs a flood guard.
+GENERATE_UNSCOPED = RateLimit("viz_hex", 2, 300)
+GENERATE_SCOPED = RateLimit("viz_hex:scoped", 20, 300)
 
-HEX_STATS_RATE_LIMIT = 20
-HEX_STATS_WINDOW = 60
+STATS_UNSCOPED = RateLimit("viz_stats", 20, 60)
+STATS_SCOPED = RateLimit("viz_stats:scoped", 60, 60)
 
 
-async def _enforce_rate_limit(
+async def _enforce(
     req: VisualizationRequest, request: Request, redis: Redis,
-    bucket: str, limit: int, window: int,
+    unscoped: RateLimit, scoped: RateLimit,
 ) -> None:
-    """Limits every request that is not scoped to the caller's own Seymours.
-
-    The unscoped case selects from all 16.7M colours, so it is the one that can
-    return a full-size point cloud however small the caller's collection is.
-    Its delta E scan is no longer what costs -- see app/services/color_index.py
-    -- but the response it produces is still the largest the API serves.
-    """
-    if req.input_seymours:
-        return
-
-    client_ip = request.client.host if request.client else "unknown"
-    allowed, retry_after = await check_rate_limit(
-        redis, f"{bucket}:{client_ip}", limit, window
-    )
-    if not allowed:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Rate limit exceeded. Try again in {retry_after} seconds."
-        )
+    await enforce_rate_limit(scoped if req.input_seymours else unscoped, request, redis)
 
 
 async def _select(req: VisualizationRequest) -> ColorSelection:
@@ -62,9 +48,7 @@ async def get_visualization_stats(
     request: Request,
     redis: Annotated[Redis, Depends(get_redis)]
 ):
-    await _enforce_rate_limit(
-        req, request, redis, "viz_stats", HEX_STATS_RATE_LIMIT, HEX_STATS_WINDOW
-    )
+    await _enforce(req, request, redis, STATS_UNSCOPED, STATS_SCOPED)
     selection = await _select(req)
     return get_stats(selection.count, selection.total)
 
@@ -75,8 +59,6 @@ async def generate_visualization(
     request: Request,
     redis: Annotated[Redis, Depends(get_redis)]
 ):
-    await _enforce_rate_limit(
-        req, request, redis, "viz_hex", HEX_GENERATE_RATE_LIMIT, HEX_GENERATE_WINDOW
-    )
+    await _enforce(req, request, redis, GENERATE_UNSCOPED, GENERATE_SCOPED)
     selection = await _select(req)
     return await asyncio.to_thread(generate_3d_html, selection, req.max_points)

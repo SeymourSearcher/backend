@@ -6,7 +6,7 @@ from jose import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import utcnow
-from app.config import get_settings
+from app.config import JWT_ALGORITHM, get_settings
 from app.errors import InvalidInputError
 from app.repositories.user_repo import UserRepository
 
@@ -51,7 +51,7 @@ async def get_discord_user(access_token: str) -> dict:
 def create_jwt(discord_id: int) -> str:
     expire = utcnow() + timedelta(minutes=settings.jwt_expire_minutes)
     payload = {"sub": str(discord_id), "exp": expire}
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return jwt.encode(payload, settings.jwt_secret, algorithm=JWT_ALGORITHM)
 
 
 async def login_with_discord(db: AsyncSession, code: str) -> str:

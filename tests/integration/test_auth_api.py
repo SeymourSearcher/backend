@@ -9,7 +9,7 @@ import pytest
 from jose import jwt
 from sqlalchemy import func, select
 
-from app.config import get_settings
+from app.config import JWT_ALGORITHM, get_settings
 from app.models import User
 from app.services import auth
 
@@ -42,7 +42,7 @@ async def test_callback_creates_user_and_returns_usable_jwt(client, db, discord)
 
     settings = get_settings()
     payload = jwt.decode(
-        response.json()["access_token"], settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+        response.json()["access_token"], settings.jwt_secret, algorithms=[JWT_ALGORITHM]
     )
     assert payload["sub"] == "42"
 
