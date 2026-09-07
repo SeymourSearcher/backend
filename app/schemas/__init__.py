@@ -6,6 +6,7 @@ from app.schemas.seymour import (
     SeymourCreate,
     SeymourResponse,
     SeymourWithMatchResponse,
+    SubFilterOption,
     UploadResponse,
 )
 from app.schemas.marketplace import (
@@ -27,6 +28,7 @@ __all__ = [
     "UploadResponse",
     "RemovalResponse",
     "SeymourWithMatchResponse",
+    "SubFilterOption",
     "MatchInfo",
     "BuyOrderCreate",
     "BuyOrderResponse",

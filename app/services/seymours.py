@@ -26,6 +26,7 @@ from app.services.matching import list_set_names
 from app.services.parser import parse_seymour_file
 from app.services.seymour_filters import (
     compute_available_filters,
+    compute_owned_sub_filters,
     filter_with_matches,
     sort_results,
 )
@@ -97,6 +98,35 @@ async def available_filters(
         redis, filters, user.id, "filters", filter_type, incomplete_only, include_dyes
     )
     return filters
+
+
+async def owned_sub_filters(
+    db: AsyncSession,
+    redis: Redis,
+    user: User,
+    filter_type: str,
+    incomplete_only: bool,
+    include_dyes: bool,
+) -> list[dict]:
+    """The /items dropdown's options: only what this user holds, with counts.
+
+    Unlike available_filters there is no catalog short-circuit for sets/dyes --
+    narrowing those two to the user's own holdings is the whole point.
+    """
+    cached = await SEYMOUR_FILTERS.get(
+        redis, user.id, "owned-filters", filter_type, incomplete_only, include_dyes
+    )
+    if cached is not None:
+        return cached
+
+    seymours = await get_user_seymours(db, redis, user.id)
+    options = compute_owned_sub_filters(
+        [(s.hex_color, s.item_name) for s in seymours], filter_type, incomplete_only, include_dyes
+    )
+    await SEYMOUR_FILTERS.set(
+        redis, options, user.id, "owned-filters", filter_type, incomplete_only, include_dyes
+    )
+    return options
 
 
 async def hex_codes(db: AsyncSession, redis: Redis, user: User) -> list[str]:

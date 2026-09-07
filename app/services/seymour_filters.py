@@ -240,6 +240,55 @@ def compute_available_filters(
     return []
 
 
+def compute_owned_sub_filters(
+    seymour_list: list[tuple], filter_type: str, incomplete_only: bool, include_dyes: bool = False
+) -> list[dict]:
+    """Sub-filter options limited to what the user owns, each with an item count.
+
+    compute_available_filters above is deliberately left alone: the marketplace
+    reads the same endpoint to build a buy order for a set you do *not* own yet,
+    so its list has to stay the whole catalog.
+
+    Each `name` is the string the sub_filter query param matches on, not a
+    display label. Dyes are keyed by bare name here even though the grid headers
+    read "<name> Stage <n>" -- that split is what sub_filter already expects.
+
+    Counts are items, matching the number of cards selecting the option shows.
+    """
+    counts = Counter()
+
+    if filter_type == "sets":
+        sets = (
+            find_incomplete_armor_sets(seymour_list)
+            if incomplete_only
+            else find_armor_sets(seymour_list)
+        )
+        for entry in sets:
+            counts[entry[0]] += len(entry[1])
+
+    elif filter_type == "dyes":
+        dye_sets = (
+            find_incomplete_dye_sets(seymour_list)
+            if incomplete_only
+            else find_fade_dye_sets(seymour_list)
+        )
+        # Summed across stages: one dye can have several complete ones, and the
+        # option selects the dye rather than a stage.
+        for entry in dye_sets:
+            counts[entry[0]] += len(entry[2])
+
+    elif filter_type in TIER_THRESHOLDS or filter_type == "all":
+        tier = filter_type if filter_type in TIER_THRESHOLDS else None
+        match_info = _get_matches(seymour_list, tier=tier, include_dyes=include_dyes)
+        # Matches are per distinct colour+piece, so a colour held three times
+        # would count once; the grid shows a card per item.
+        held = Counter(seymour_list)
+        for key, match in match_info.items():
+            counts[match["target_name"]] += held[key]
+
+    return [{"name": name, "count": count} for name, count in sorted(counts.items())]
+
+
 def sort_results(results: list[dict], sort: str, filter_type: str) -> list[dict]:
     if sort not in ("asc", "desc"):
         return results

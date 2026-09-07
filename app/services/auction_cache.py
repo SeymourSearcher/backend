@@ -26,6 +26,7 @@ from app.services.auction_stats import compute_auction_stats
 from app.services.cache import (
     AUCTION_COUNT,
     AUCTION_STATS,
+    COLLECTION_VALUE,
     HEX_PRICES,
     TOP_SALES,
     CacheEntry,
@@ -57,6 +58,8 @@ async def refresh_ended(db: AsyncSession, redis: Redis) -> None:
     await AUCTION_COUNT.invalidate_all(redis, _table_prefix(EndedAuction))
     await HEX_PRICES.invalidate_all(redis)
     await TOP_SALES.invalidate_all(redis)
+    # Priced from the rows that just changed, so it cannot outlive them.
+    await COLLECTION_VALUE.invalidate_all(redis)
 
     for filters in hot_stats:
         await compute_auction_stats(db, filters, redis=redis)

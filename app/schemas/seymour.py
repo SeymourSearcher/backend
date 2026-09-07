@@ -35,6 +35,12 @@ class UploadResponse(BaseModel):
     skipped: int
 
 
+class SubFilterOption(BaseModel):
+    """One /items dropdown option. `name` is the sub_filter key, not a label."""
+    name: str
+    count: int
+
+
 class RemovalResponse(BaseModel):
     """What clearing a collection actually took with it.
 

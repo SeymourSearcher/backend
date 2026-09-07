@@ -91,6 +91,11 @@ TOP_SALES = CacheEntry("top_sales:", AUCTION_TTL)
 # uploads seymours.
 HEX_PRICES = CacheEntry("hex_prices:", AUCTION_TTL)
 
+# A collection's estimated worth. Keyed by the collection's contents, and on the
+# auction TTL rather than the seymour one: it goes stale when prices move, not
+# when somebody uploads. See app/services/collection_value.py.
+COLLECTION_VALUE = CacheEntry("collection_value:", AUCTION_TTL)
+
 # Results and filters deliberately share a prefix so invalidating a user's
 # seymours clears both in one scan.
 SEYMOUR_RESULTS = CacheEntry("seymours:", 1800)

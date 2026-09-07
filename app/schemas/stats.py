@@ -26,6 +26,32 @@ class RankingResponse(StatsResponse):
     avatar_hash: str | None = None
 
 
+class CategoryValues(BaseModel):
+    """Estimated worth per /items chip. No `custom`; see collection_value.py."""
+    stars: int
+    words: int
+    dupes: int
+    t1: int
+    t2: int
+    t3: int
+    sets: int
+    dyes: int
+
+
+class CollectionValueResponse(BaseModel):
+    """Estimated worth of a collection, in coins.
+
+    `total` covers every item that could be priced; `unpriced` is how many could
+    not, which is what makes `total` readable rather than merely large. The
+    category figures overlap and do not sum to `total` -- an item can be a Star
+    and T1 and in a set at once.
+    """
+    total: int
+    priced: int
+    unpriced: int
+    categories: CategoryValues
+
+
 class FeaturedSetResponse(BaseModel):
     """One gallery tile: a four-piece set and who owns it. `hexes` is in
     app.pieces.Piece order."""

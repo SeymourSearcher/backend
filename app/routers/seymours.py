@@ -10,6 +10,7 @@ from app.schemas import (
     RemovalResponse,
     SeymourResponse,
     SeymourWithMatchResponse,
+    SubFilterOption,
     UploadResponse,
 )
 from app.services import seymours
@@ -28,6 +29,22 @@ async def get_available_filters(
     include_dyes: bool = Query(False)
 ):
     return await seymours.available_filters(
+        db, redis, user, filter, incomplete_only, include_dyes
+    )
+
+
+@router.get("/sub-filters", response_model=list[SubFilterOption])
+async def get_owned_sub_filters(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+    filter: str = Query(...),
+    incomplete_only: bool = Query(False),
+    include_dyes: bool = Query(False),
+):
+    """The /items dropdown. Distinct from available-filters, which the
+    marketplace needs unrestricted -- see services/seymour_filters.py."""
+    return await seymours.owned_sub_filters(
         db, redis, user, filter, incomplete_only, include_dyes
     )
 
