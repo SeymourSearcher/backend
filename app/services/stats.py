@@ -55,7 +55,17 @@ def get_tier_data(matches):
     return counts["t1"], counts["t2"], counts["t3"]
 
 def get_stats(seymour_list):
-    """Compute all stats in parallel using ThreadPoolExecutor."""
+    """The five tallies, fanned out.
+
+    The private pool is load-bearing, not incidental: this whole function runs
+    inside an asyncio.to_thread (see app/services/rankings.py), so submitting
+    these to the default executor instead -- which is what to_thread would do --
+    puts a thread of that pool in a blocking wait on the same pool. That
+    deadlocks at cpu_count+4 concurrent uploads.
+
+    Linear in inventory size: 0.07s at 10k, 0.67s at MAX_UPLOAD_ROWS. Unlike
+    find_custom_sets it needs no ceiling. Re-measure with scripts/bench_compute.py.
+    """
     futures = {}
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures['matches'] = executor.submit(

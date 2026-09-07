@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.config import get_settings
-from app.dependencies import global_rate_limit
+from app.rate_limit import global_rate_limit
 from app.errors import (
     ConflictError,
     DomainError,

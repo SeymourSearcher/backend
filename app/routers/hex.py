@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db, get_redis
 from app.pieces import parse_pieces
+from app.rate_limit import RateLimit, limiter
 from app.schemas.hex import (
     HexAuctionStatsResponse,
     HexInfoResponse,
@@ -18,10 +19,16 @@ from app.services.hex_info import (
     get_hex_sales,
 )
 
-router = APIRouter()
-
 PiecesParam = Annotated[str | None, Query(description="Comma-separated piece indices, 0-3")]
 TierParam = Annotated[Literal["t1", "t2", "t3", "all"] | None, Query()]
+
+# Tighter than the global ceiling because the cache behind these is keyed by the
+# hex code, of which there are 16.7M: a caller walking them misses every time,
+# and each miss is several full passes over the owner table (~57ms per million
+# owned rows). Four requests per page view, so this is ~15 hex pages a minute.
+HEX_LIMIT = RateLimit("hex", 60, 60)
+
+router = APIRouter(dependencies=[Depends(limiter(HEX_LIMIT))])
 
 
 @router.get("/{hex_code}", response_model=HexInfoResponse)

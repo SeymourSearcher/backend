@@ -113,15 +113,3 @@ async def invalidate_hex_pages(redis: Redis) -> None:
     await HEX_INFO.invalidate_all(redis)
     await OWNER_MATCHES.invalidate_all(redis)
     await OWNER_HEXES.invalidate(redis)
-
-
-RATE_LIMIT_PREFIX = "ratelimit:"
-
-
-async def check_rate_limit(redis: Redis, key: str, max_requests: int, window_seconds: int) -> tuple[bool, int]:
-    full_key = f"{RATE_LIMIT_PREFIX}{key}"
-    current = await redis.incr(full_key)
-    if current == 1:
-        await redis.expire(full_key, window_seconds)
-    ttl = await redis.ttl(full_key)
-    return current <= max_requests, max(0, ttl)

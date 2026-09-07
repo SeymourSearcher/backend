@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from redis.asyncio import Redis
 
-from app.dependencies import RateLimit, enforce_rate_limit, get_redis
+from app.dependencies import get_redis
+from app.rate_limit import RateLimit, enforce
 from app.schemas.visualization import VisualizationRequest, VisualizationStats
 from app.services.color_index import ColorSelection
 from app.services.visualization import select_colors, get_stats, generate_3d_html
@@ -28,7 +29,8 @@ async def _enforce(
     req: VisualizationRequest, request: Request, redis: Redis,
     unscoped: RateLimit, scoped: RateLimit,
 ) -> None:
-    await enforce_rate_limit(scoped if req.input_seymours else unscoped, request, redis)
+    """Not a router-level limiter(): which bucket applies depends on the body."""
+    await enforce(scoped if req.input_seymours else unscoped, request, redis)
 
 
 async def _select(req: VisualizationRequest) -> ColorSelection:

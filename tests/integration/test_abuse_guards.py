@@ -1,55 +1,90 @@
 """What one unauthenticated -- or one ordinary authenticated -- caller can cost.
 
-Three separate ceilings, none of which existed before: a per-IP request limit on
-every route, a throttle on the login callback, and the inventory cap on the
-custom-set filter. The last is the sharpest: find_custom_sets grows
+Four ceilings, none of which existed before: a per-IP limit on every route, a
+tighter one on the hex pages, a throttle on the login callback, and the inventory
+cap on the custom-set filter. The last is the sharpest: find_custom_sets grows
 superlinearly and used to run inline on the event loop, so a single request
 against a large collection froze every other request on the worker.
+
+The limits are exercised by pre-filling their buckets rather than by lowering
+them, so the numbers in app/routers/* stay the ones under test.
 """
 import httpx
 import pytest
 
-from app.dependencies import GLOBAL_LIMIT
 from app.models import Seymour
 from app.pieces import Piece
+from app.rate_limit import GLOBAL_LIMIT, KEY_PREFIX, RateLimit
 from app.routers.auth import CALLBACK_LIMIT
+from app.routers.hex import HEX_LIMIT
 from app.services import auth, custom_sets
 
 pytestmark = pytest.mark.integration
 
-
-async def test_the_global_limit_eventually_refuses(client, monkeypatch):
-    monkeypatch.setattr("app.dependencies.GLOBAL_LIMIT", GLOBAL_LIMIT._replace(limit=3))
-
-    codes = [(await client.get("/marketplace/sets-pieces")).status_code for _ in range(4)]
-
-    assert codes == [200, 200, 200, 429]
+CALLER = "203.0.113.9"
+OTHER_CALLER = "203.0.113.10"
 
 
-async def test_health_is_exempt_from_the_global_limit(client, monkeypatch):
+def sent_from(ip: str) -> dict[str, str]:
+    """client_ip reads CF-Connecting-IP first; production sits behind Cloudflare."""
+    return {"CF-Connecting-IP": ip}
+
+
+async def exhaust(redis, rl: RateLimit, ip: str = CALLER) -> None:
+    await redis.setex(f"{KEY_PREFIX}{rl.bucket}:{ip}", rl.window, rl.limit)
+
+
+async def test_the_global_limit_refuses_a_caller_that_has_spent_it(client, redis):
+    await exhaust(redis, GLOBAL_LIMIT)
+
+    response = await client.get("/marketplace/sets-pieces", headers=sent_from(CALLER))
+
+    assert response.status_code == 429
+    assert "Rate limit exceeded" in response.json()["detail"]
+
+
+async def test_the_limits_are_per_caller_not_shared(client, redis):
+    """The bug this guards: behind traefik every visitor looked like the proxy,
+    so one attacker drained the bucket for everyone."""
+    await exhaust(redis, GLOBAL_LIMIT)
+
+    response = await client.get("/marketplace/sets-pieces", headers=sent_from(OTHER_CALLER))
+
+    assert response.status_code == 200
+
+
+async def test_health_is_exempt_from_the_global_limit(client, redis):
     """The swarm healthcheck runs every 10s from inside the container."""
-    monkeypatch.setattr("app.dependencies.GLOBAL_LIMIT", GLOBAL_LIMIT._replace(limit=1))
+    await exhaust(redis, GLOBAL_LIMIT)
 
-    for _ in range(3):
-        assert (await client.get("/health")).status_code == 200
+    assert (await client.get("/health", headers=sent_from(CALLER))).status_code == 200
 
 
-async def test_the_login_callback_is_throttled(client, monkeypatch):
-    monkeypatch.setattr("app.routers.auth.CALLBACK_LIMIT", CALLBACK_LIMIT._replace(limit=2))
+async def test_the_hex_pages_have_their_own_tighter_limit(client, redis):
+    """Their cache is keyed by hex code, so a walk misses on every request."""
+    assert HEX_LIMIT.limit < GLOBAL_LIMIT.limit
+    await exhaust(redis, HEX_LIMIT)
 
+    refused = await client.get("/hex/FF0000", headers=sent_from(CALLER))
+    allowed = await client.get("/hex/FF0000", headers=sent_from(OTHER_CALLER))
+
+    assert (refused.status_code, allowed.status_code) == (429, 200)
+
+
+async def test_the_login_callback_is_throttled(client, redis, monkeypatch):
     async def refuse(code):
         raise httpx.HTTPStatusError("bad", request=None, response=None)
 
     monkeypatch.setattr(auth, "exchange_code", refuse)
+    body = {"code": "x"}
 
-    codes = [
-        (await client.post("/auth/discord/callback", json={"code": "x"})).status_code
-        for _ in range(3)
-    ]
+    # Reaches the stubbed exchange and fails there, so the throttle is what
+    # changes once the bucket is spent -- not the outcome of the login.
+    first = await client.post("/auth/discord/callback", json=body, headers=sent_from(CALLER))
+    await exhaust(redis, CALLBACK_LIMIT)
+    second = await client.post("/auth/discord/callback", json=body, headers=sent_from(CALLER))
 
-    # The first two get as far as the stubbed exchange; only the third is refused.
-    assert codes[:2] == [400, 400]
-    assert codes[2] == 429
+    assert (first.status_code, second.status_code) == (400, 429)
 
 
 @pytest.fixture
