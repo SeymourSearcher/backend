@@ -174,7 +174,15 @@ def _load_item_data():
             hex_to_items.setdefault(hex_code, []).append(name)
             for p in pieces:
                 key_item_hexes.append((hex_code, SLOT_TO_PIECE[p]))
-    
+
+    # Several catalog items can share one hex -- Pure Blue and Lapis Armor 3p are
+    # both 0000FF. key_item_for_hex takes the first, so a set member has to lead
+    # or the set is unreachable from every hex-keyed label and sub-filter; without
+    # this the winner is just data.json's category order, which the mod controls.
+    for names in hex_to_items.values():
+        names.sort(key=lambda name: name not in item_to_set)
+
+
     # Fade dyes: {dye_name: {stage: hex}}
     fade_dyes = {}
     fade_dye_hexes = []
