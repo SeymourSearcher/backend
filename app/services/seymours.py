@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 
 from fastapi import UploadFile
@@ -20,6 +21,7 @@ from app.services.cache import (
 )
 from app.services.rankings import refresh_user_stats
 from app.services.compute import FADE_DYES, find_custom_sets
+from app.services import custom_sets
 from app.services.matching import list_set_names
 from app.services.parser import parse_seymour_file
 from app.services.seymour_filters import (
@@ -136,7 +138,16 @@ async def list_for_user(
         seymour_list = [(s.hex_color, s.item_name) for s in seymours]
         custom_sets_data = await CUSTOM_SETS.get(redis, custom_sets_hash(seymour_list))
         if custom_sets_data is None:
-            custom_sets_data = find_custom_sets(seymour_list, max_avg_delta_e=1.0)
+            # Same ceiling and same thread hop as the upload path -- run inline
+            # on the loop this blocks every request on the worker, and
+            # MAX_UPLOAD_ROWS is 100_000. See app/services/custom_sets.py.
+            if len(seymour_list) > custom_sets.MAX_INVENTORY:
+                raise InvalidInputError(
+                    "Collection is too large for the custom-set filter"
+                )
+            custom_sets_data = await asyncio.to_thread(
+                find_custom_sets, seymour_list, custom_sets.MAX_AVG_DELTA_E
+            )
             await CUSTOM_SETS.set(redis, custom_sets_data, custom_sets_hash(seymour_list))
 
     filtered = filter_with_matches(

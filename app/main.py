@@ -1,8 +1,9 @@
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.config import get_settings
+from app.dependencies import global_rate_limit
 from app.errors import (
     ConflictError,
     DomainError,
@@ -18,7 +19,14 @@ settings = get_settings()
 
 # Auction sync and username resolution both run in a separate process; see
 # app/worker.py. Nothing here makes outbound HTTP calls.
-app = FastAPI(title="Seymour Searcher API")
+#
+# The rate limit is an app-level dependency rather than middleware so it resolves
+# get_redis through the dependency system, which is where the test suite swaps in
+# fakeredis. It exempts /health and /robots.txt itself.
+app = FastAPI(
+    title="Seymour Searcher API",
+    dependencies=[Depends(global_rate_limit)],
+)
 
 DOMAIN_ERROR_STATUS = {
     NotFoundError: 404,
@@ -36,21 +44,25 @@ async def handle_domain_error(request: Request, exc: DomainError) -> JSONRespons
     return JSONResponse(status_code=status, content={"detail": str(exc)})
 
 
-# The one HTML body the API returns -- the colour cube -- is fetched as text and
-# saved as a file by the client, never rendered from this origin, so the policy
-# can stay at default-src 'none' without breaking it.
 SECURITY_HEADERS = {
-    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
 }
+
+# The one HTML body the API returns -- the colour cube -- is fetched as text and
+# saved as a file by the client, never rendered from this origin, so nothing here
+# needs to execute. Swagger is the exception: it is a real page off a CDN.
+CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+CSP_EXEMPT_PATHS = frozenset({"/docs", "/redoc", "/openapi.json"})
 
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers.update(SECURITY_HEADERS)
+    if request.url.path not in CSP_EXEMPT_PATHS:
+        response.headers["Content-Security-Policy"] = CSP
     return response
 
 

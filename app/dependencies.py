@@ -1,9 +1,11 @@
+import logging
 from typing import Annotated, NamedTuple, Optional
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import JWTError, jwt
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 from app.database import async_session
 from app.config import JWT_ALGORITHM, get_settings
@@ -11,10 +13,24 @@ from app.models import User
 from app.repositories.user_repo import UserRepository
 from app.services.cache import check_rate_limit
 
+logger = logging.getLogger(__name__)
+
 settings = get_settings()
 security = HTTPBearer(auto_error=False)
 
 redis_client: Redis | None = None
+
+
+async def get_redis() -> Redis:
+    global redis_client
+    if redis_client is None:
+        redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+    return redis_client
+
+
+async def get_db():
+    async with async_session() as session:
+        yield session
 
 
 def client_ip(request: Request) -> str:
@@ -50,16 +66,29 @@ async def enforce_rate_limit(rl: RateLimit, request: Request, redis: Redis) -> N
         )
 
 
-async def get_redis() -> Redis:
-    global redis_client
-    if redis_client is None:
-        redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
-    return redis_client
+# A ceiling on any one address, not a per-endpoint budget: the caches in front of
+# the expensive endpoints are all keyed by caller-supplied values -- hex code,
+# auction filters -- so a scan misses every time and puts a full walk on the
+# thread pool plus a fresh Redis key. High enough that no real page load notices.
+GLOBAL_LIMIT = RateLimit("global", 240, 60)
+
+# The swarm healthcheck runs every 10s and shares an address with anything else
+# calling from inside the container.
+UNLIMITED_PATHS = frozenset({"/health", "/robots.txt"})
 
 
-async def get_db():
-    async with async_session() as session:
-        yield session
+async def global_rate_limit(
+    request: Request, redis: Annotated[Redis, Depends(get_redis)]
+) -> None:
+    """Applied to every route; see the app-level dependency in app/main.py."""
+    if request.url.path in UNLIMITED_PATHS:
+        return
+    try:
+        await enforce_rate_limit(GLOBAL_LIMIT, request, redis)
+    except RedisError:
+        # Fail open. Redis being unreachable is an outage of the limiter, not of
+        # the API, and every endpoint behind it already tolerates a cache miss.
+        logger.warning("rate limiter unavailable, allowing request", exc_info=True)
 
 
 def _discord_id_from_token(token: str) -> int | None:
