@@ -37,6 +37,9 @@ class AuctionFilters:
     tier: str | None = None
     set_name: str | None = None
     include_dyes: bool = True
+    # The catalog colour an auction was matched to, rather than the colour it
+    # actually is: hex_color is exact, so it finds nothing for most colours.
+    target_hex: str | None = None
 
 
 def match_columns_for(model, include_dyes: bool):
@@ -67,6 +70,9 @@ def build_where(model, filters: AuctionFilters):
         if tier_bounds(filters.tier) is None:
             return false()
         conditions.append(tier_col == filters.tier)
+
+    if filters.target_hex:
+        conditions.append(target_col == filters.target_hex.upper().lstrip("#"))
 
     if filters.set_name:
         target_hexes = get_set_target_hexes(filters.set_name)

@@ -30,4 +30,8 @@ CMD ["pytest"]
 # API app keeps building correctly with its build-stage field left blank.
 FROM base AS api
 EXPOSE 8000
+# Without this, swarm calls the task ready as soon as PID 1 exists and traefik routes
+# to it mid-boot -- a 502 on every deploy. python:slim has no curl/wget, hence urllib.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

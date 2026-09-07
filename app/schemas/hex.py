@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 
 from app.pieces import Piece
+from app.schemas.auction import AuctionStatsResponse
 from app.schemas.common import PublicUser
 
 
@@ -57,3 +58,14 @@ class HexOwnersResponse(BaseModel):
     total: int
     max_delta_e: float
     items: list[HexOwnerMatch]
+
+
+class HexAuctionStatsResponse(AuctionStatsResponse):
+    """Sale statistics for the colour a search resolves to.
+
+    target_hex is null only when nothing in the catalog matched at all; tier is
+    additionally null past the last tier, where no comparable band exists.
+    """
+    target_name: str | None
+    target_hex: str | None
+    tier: str | None

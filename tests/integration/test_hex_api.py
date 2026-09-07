@@ -8,6 +8,7 @@ import pytest
 
 from app.models import Seymour, User
 from app.pieces import Piece
+from app.services.matching import get_tier
 
 pytestmark = pytest.mark.integration
 
@@ -83,6 +84,42 @@ async def test_every_match_carries_a_price_slot(client, owners):
 
     for match in [body["exact_match"], *body["top_matches"]]:
         assert match["price"] == {"median": None, "sales": 0}
+
+
+class TestAuctionStats:
+    """The section elaborates on the hero's figure, so it must resolve to the
+    same colour the hero priced."""
+
+    async def test_an_exact_colour_is_priced_as_itself(self, client, owners):
+        body = (await client.get(f"/hex/{TARGET}/auction-stats")).json()
+
+        assert body["target_hex"] == TARGET
+        assert body["target_name"] == "Farm Suit"
+        assert body["tier"] == "t1"
+
+    async def test_an_empty_table_reports_zeroes_not_an_error(self, client, owners):
+        body = (await client.get(f"/hex/{TARGET}/auction-stats")).json()
+
+        assert body["total"] == 0
+        assert body["median_price"] == 0.0
+        assert body["price_distribution"] == []
+        assert len(body["hourly_activity"]) == 24
+
+    @pytest.mark.parametrize("searched", [TARGET, "FFFA00", "A3F2C1"])
+    async def test_it_resolves_to_the_same_reference_as_the_hero(self, client, owners, searched):
+        """The section elaborates on the hero's number, so it must price the
+        same colour at the tier that colour's own distance earns."""
+        info = (await client.get(f"/hex/{searched}")).json()
+        body = (await client.get(f"/hex/{searched}/auction-stats")).json()
+
+        reference = info["exact_match"] or info["top_matches"][0]
+        assert body["target_hex"] == reference["target_hex"]
+        assert body["target_name"] == reference["target_name"]
+        assert body["tier"] == get_tier(reference["delta_e"])
+
+    @pytest.mark.parametrize("bad", ["ZZZZZZ", "12345", "nothex"])
+    async def test_malformed_hex_is_rejected(self, client, bad):
+        assert (await client.get(f"/hex/{bad}/auction-stats")).status_code in (400, 404)
 
 
 class TestPieceFilter:

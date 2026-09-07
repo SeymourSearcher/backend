@@ -5,8 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db, get_redis
 from app.pieces import parse_pieces
-from app.schemas.hex import HexInfoResponse, HexOwnersResponse
-from app.services.hex_info import get_hex_info, get_hex_owners
+from app.schemas.hex import HexAuctionStatsResponse, HexInfoResponse, HexOwnersResponse
+from app.services.hex_info import get_hex_auction_stats, get_hex_info, get_hex_owners
 
 router = APIRouter()
 
@@ -22,6 +22,17 @@ async def hex_info(
     pieces: PiecesParam = None,
 ):
     return await get_hex_info(db, redis, hex_code, include_dyes, parse_pieces(pieces))
+
+
+@router.get("/{hex_code}/auction-stats", response_model=HexAuctionStatsResponse)
+async def hex_auction_stats(
+    hex_code: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis: Annotated[Redis, Depends(get_redis)],
+    include_dyes: bool = False,
+    pieces: PiecesParam = None,
+):
+    return await get_hex_auction_stats(db, redis, hex_code, include_dyes, parse_pieces(pieces))
 
 
 @router.get("/{hex_code}/owners", response_model=HexOwnersResponse)

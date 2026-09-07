@@ -5,6 +5,8 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import InvalidInputError
+from app.services.auction_queries import AuctionFilters
+from app.services.auction_stats import compute_auction_stats
 from app.services.cache import HEX_INFO, OWNER_MATCHES
 from app.services.owner_hexes import get_owner_hexes
 from app.services.owner_matches import (
@@ -108,6 +110,56 @@ async def get_hex_info(
     info = {"hex_code": hex_code, "exact_match": exact_match, "top_matches": top_matches}
     await HEX_INFO.set(redis, info, hex_code, include_dyes, _pieces_key(pieces))
     return info
+
+
+def _empty_stats() -> dict:
+    """Built per call: a module-level constant would share its inner lists."""
+    return {
+        "total": 0,
+        "avg_price": 0.0,
+        "median_price": 0.0,
+        "total_volume": 0,
+        "bin_count": 0,
+        "auction_count": 0,
+        "t1_count": 0,
+        "t2_count": 0,
+        "t3_count": 0,
+        "price_distribution": [],
+        "hourly_activity": [0] * 24,
+    }
+
+
+async def get_hex_auction_stats(
+    db: AsyncSession, redis: Redis, hex_code: str, include_dyes: bool, pieces: list[int] | None
+) -> dict:
+    """Full sale statistics for the colour a search resolves to.
+
+    Same reference the hero prices -- the exact catalog colour when there is
+    one, otherwise the nearest -- so the section elaborates on the headline
+    figure rather than quoting a different one.
+    """
+    info = await get_hex_info(db, redis, hex_code, include_dyes, pieces)
+    reference = info["exact_match"] or next(iter(info["top_matches"]), None)
+    tier = get_tier(reference["delta_e"]) if reference else None
+
+    context = {
+        "target_name": reference["target_name"] if reference else None,
+        "target_hex": reference["target_hex"] if reference else None,
+        "tier": tier,
+    }
+
+    # Past the last tier there is no comparable band to average over, and
+    # dropping the tier filter would quote every sale of the item instead.
+    if tier is None:
+        return {**context, **_empty_stats()}
+
+    filters = AuctionFilters(
+        target_hex=reference["target_hex"],
+        tier=tier,
+        pieces=pieces,
+        include_dyes=include_dyes,
+    )
+    return {**context, **await compute_auction_stats(db, filters, redis=redis)}
 
 
 async def get_hex_owners(
