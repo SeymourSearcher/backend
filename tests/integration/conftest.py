@@ -15,6 +15,7 @@ import os
 import httpx
 import pytest
 from fastapi import Depends
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
@@ -39,12 +40,43 @@ def sessionmaker(engine):
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
-@pytest.fixture
-async def clean_db(engine):
-    """A fresh schema per test, so ordering and leftovers can never matter."""
+@pytest.fixture(scope="session")
+async def schema(engine):
+    """Build the schema once for the run.
+
+    This used to be per-test, and it was 97% of the suite: ~0.7s of DDL before
+    each test, against ~0.02s of test. Emptying the tables gives the same
+    isolation for a fraction of that -- the schema never varies between tests,
+    only the rows do.
+    """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+
+
+@pytest.fixture
+async def clean_db(engine, schema):
+    """Empty every table, so ordering and leftovers can never matter.
+
+    DELETE rather than TRUNCATE: TRUNCATE drops and rebuilds the tablespace, and
+    at 16 tables that cost ~0.34s per test even though nearly all of them were
+    already empty. DELETE against an empty table touches no pages.
+
+    Ids therefore keep climbing across the run instead of restarting. That is
+    only safe while no test asserts a literal id, which is what the suite
+    passing demonstrates -- they all capture ids from the rows they create.
+
+    FOREIGN_KEY_CHECKS goes off for the duration because the loop's order is not
+    a topological one, and is restored on the same connection before it returns
+    to the pool.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+        try:
+            for table in Base.metadata.sorted_tables:
+                await conn.execute(table.delete())
+        finally:
+            await conn.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
 
 
 @pytest.fixture

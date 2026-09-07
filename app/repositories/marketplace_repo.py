@@ -284,11 +284,26 @@ class SellOrderRepository(BaseRepository):
         ) or 0
 
     async def listed_seymour_ids(self, seymour_ids: list[int]) -> set[int]:
+        """Which of these are already up for sale. Must be a locking read.
+
+        Under REPEATABLE READ the consistent snapshot is taken at the
+        transaction's first plain SELECT -- which, since get_current_user loads
+        the user on the request's own session, has already happened by the time
+        any handler runs. A plain SELECT here would therefore read state from
+        before the caller blocked on lock_owned, miss the listing the winner
+        just committed, and list the same Seymour twice. A locking read always
+        sees the latest committed row.
+
+        Safe against deadlock because callers hold FOR UPDATE on the Seymour
+        rows first, so two transactions can never both reach this line for the
+        same id.
+        """
         rows = await self.session.execute(
             select(SellOrder.seymour_id)
             .where(SellOrder.seymour_id.in_(seymour_ids))
             .where(SellOrder.status == OrderStatus.ACTIVE)
             .where(SellOrder.expires_at > utcnow())
+            .with_for_update()
         )
         return set(rows.scalars().all())
 
