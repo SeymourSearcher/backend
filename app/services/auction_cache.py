@@ -23,7 +23,7 @@ from app.services.auction_queries import (
     filters_key,
 )
 from app.services.auction_stats import compute_auction_stats
-from app.services.cache import AUCTION_COUNT, AUCTION_STATS, CacheEntry
+from app.services.cache import AUCTION_COUNT, AUCTION_STATS, HEX_PRICES, CacheEntry
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ async def refresh_ended(db: AsyncSession, redis: Redis) -> None:
     # Every stats entry is over ended_auctions, so none of them survive.
     await AUCTION_STATS.invalidate_all(redis)
     await AUCTION_COUNT.invalidate_all(redis, _table_prefix(EndedAuction))
+    await HEX_PRICES.invalidate_all(redis)
 
     for filters in hot_stats:
         await compute_auction_stats(db, filters, redis=redis)

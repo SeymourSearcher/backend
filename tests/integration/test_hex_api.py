@@ -29,15 +29,34 @@ async def owners(db):
     await db.commit()
 
 
-async def test_returns_the_exact_set_as_the_top_match(client, owners):
+async def test_a_catalog_colour_is_reported_as_an_exact_match(client, owners):
     body = (await client.get(f"/hex/{TARGET}")).json()
 
     assert body["hex_code"] == TARGET
-    top = body["top_matches"][0]
-    assert top["target_hex"] == TARGET
-    assert top["target_name"] == "Farm Suit"
-    assert top["delta_e"] == 0.0
-    assert top["pieces"] == [0, 1, 2, 3]
+    exact = body["exact_match"]
+    assert exact["target_hex"] == TARGET
+    assert exact["target_name"] == "Farm Suit"
+    assert exact["delta_e"] == 0.0
+    assert exact["pieces"] == [0, 1, 2, 3]
+
+
+async def test_the_exact_match_is_not_repeated_among_the_near_ones(client, owners):
+    """It is the colour, not something near it -- listing it as "closest" is noise."""
+    body = (await client.get(f"/hex/{TARGET}")).json()
+
+    assert TARGET not in [m["target_hex"] for m in body["top_matches"]]
+    assert all(m["delta_e"] > 0 for m in body["top_matches"])
+
+
+async def test_three_near_matches_survive_dropping_the_exact_one(client, owners):
+    assert len((await client.get(f"/hex/{TARGET}")).json()["top_matches"]) == 3
+
+
+async def test_a_colour_that_is_not_in_the_catalog_has_no_exact_match(client, owners):
+    body = (await client.get("/hex/A3F2C1")).json()
+
+    assert body["exact_match"] is None
+    assert len(body["top_matches"]) == 3
 
 
 async def test_pieces_and_item_names_serialise_as_indices(client, owners):
@@ -48,7 +67,7 @@ async def test_pieces_and_item_names_serialise_as_indices(client, owners):
 
 
 async def test_a_match_buckets_its_owners_by_tier(client, owners):
-    tiers = (await client.get(f"/hex/{TARGET}")).json()["top_matches"][0]["users_by_tier"]
+    tiers = (await client.get(f"/hex/{TARGET}")).json()["exact_match"]["users_by_tier"]
 
     assert [u["username"] for u in tiers["t1"]] == ["exact", "close"]
     assert tiers["t1"][0]["delta_e"] == 0.0
@@ -56,6 +75,52 @@ async def test_a_match_buckets_its_owners_by_tier(client, owners):
 
     everyone = [u["username"] for tier in tiers.values() for u in tier]
     assert "far" not in everyone  # 000000 is 137 away
+
+
+async def test_every_match_carries_a_price_slot(client, owners):
+    """No auctions exist in this schema, so the honest answer is None, not 0."""
+    body = (await client.get(f"/hex/{TARGET}")).json()
+
+    for match in [body["exact_match"], *body["top_matches"]]:
+        assert match["price"] == {"median": None, "sales": 0}
+
+
+class TestPieceFilter:
+    async def test_matches_are_restricted_to_the_chosen_slots(self, client, owners):
+        body = (await client.get(f"/hex/{TARGET}?pieces=0")).json()
+
+        for match in [body["exact_match"], *body["top_matches"]]:
+            assert Piece.HELMET in match["pieces"]
+
+    async def test_an_unfiltered_request_is_not_narrowed(self, client, owners):
+        wide = (await client.get(f"/hex/{TARGET}")).json()
+        narrow = (await client.get(f"/hex/{TARGET}?pieces=0")).json()
+
+        assert len(wide["top_matches"]) >= len(narrow["top_matches"])
+
+    async def test_owners_are_filtered_by_slot(self, client, db):
+        user = User(discord_id=41, username="mixed", avatar_hash=None)
+        db.add(user)
+        await db.flush()
+        db.add(Seymour(user_id=user.id, item_name=Piece.HELMET, hex_color=TARGET))
+        db.add(Seymour(user_id=user.id, item_name=Piece.BOOTS, hex_color=TARGET))
+        await db.commit()
+
+        boots = (await client.get(f"/hex/{TARGET}/owners?pieces=3")).json()
+
+        assert boots["total"] == 1
+        assert boots["items"][0]["piece"] == Piece.BOOTS
+
+    async def test_filtering_owners_reuses_one_cached_scan(self, client, owners, db):
+        """The slot filter runs after the cache read, so flipping it must not
+        re-walk the table."""
+        await client.get(f"/hex/{TARGET}/owners?pieces=0")
+
+        await db.execute(Seymour.__table__.delete())
+        await db.commit()
+
+        assert (await client.get(f"/hex/{TARGET}/owners?pieces=3")).json()["total"] == 0
+        assert (await client.get(f"/hex/{TARGET}/owners?pieces=0")).json()["total"] == 2
 
 
 @pytest.mark.parametrize("bad", ["ZZZZZZ", "12345", "1234567", "", "nothex"])
@@ -143,7 +208,7 @@ class TestOwnerSnapshot:
         await db.commit()
 
         body = (await client.get(f"/hex/{TARGET}?include_dyes=true")).json()
-        tiers = body["top_matches"][0]["users_by_tier"]
+        tiers = body["exact_match"]["users_by_tier"]
         assert [u["username"] for u in tiers["t1"]] == ["exact", "close"]
 
     async def test_an_upload_rebuilds_it(self, client, as_user, owners, db, user):

@@ -13,12 +13,16 @@ from app.services.owner_matches import (
     tier_users,
 )
 from app.services.compute import ITEM_TO_INFO, find_top_hex_matches
+from app.services.hex_prices import price_estimates
 from app.pieces import Piece
 from app.services.matching import (
     dye_label_for_hex,
+    get_tier,
     key_item_for_hex,
     set_name_for_hex,
 )
+
+CATALOG_MATCHES = 3
 
 HEX_PATTERN = re.compile(r'^[0-9A-Fa-f]{6}$')
 
@@ -57,30 +61,62 @@ def _tiers_per_match(owners, top_matches: list[dict]) -> list[dict]:
     return [tier_users(owners, m["target_hex"]) for m in top_matches]
 
 
+def _pieces_key(pieces: list[int] | None) -> str:
+    return ",".join(map(str, pieces)) if pieces else "all"
+
+
 async def get_hex_info(
-    db: AsyncSession, redis: Redis, hex_code: str, include_dyes: bool
+    db: AsyncSession, redis: Redis, hex_code: str, include_dyes: bool, pieces: list[int] | None
 ) -> dict:
     hex_code = validate_hex(hex_code)
 
-    cached = await HEX_INFO.get(redis, hex_code, include_dyes)
+    cached = await HEX_INFO.get(redis, hex_code, include_dyes, _pieces_key(pieces))
     if cached is not None:
         return cached
 
-    raw_matches = await asyncio.to_thread(find_top_hex_matches, hex_code, 3, include_dyes)
-    top_matches = [m for t, d in raw_matches if (m := build_match_info(t, d, include_dyes))]
+    # One extra, so dropping the searched colour itself still leaves three
+    # genuinely *nearby* items rather than two.
+    raw_matches = await asyncio.to_thread(
+        find_top_hex_matches, hex_code, CATALOG_MATCHES + 1, include_dyes, pieces
+    )
+    matches = [m for t, d in raw_matches if (m := build_match_info(t, d, include_dyes))]
+
+    exact_match = next((m for m in matches if m["target_hex"] == hex_code), None)
+    top_matches = [m for m in matches if m is not exact_match][:CATALOG_MATCHES]
+
+    # The exact match is enriched alongside the rest so the hero can price the
+    # colour you actually searched rather than the next item along.
+    enriched = ([exact_match] if exact_match else []) + top_matches
 
     owners = await get_owner_hexes(db, redis)
-    tiers = await asyncio.to_thread(_tiers_per_match, owners, top_matches)
-    for match, users_by_tier in zip(top_matches, tiers):
-        match["users_by_tier"] = users_by_tier
+    tiers = await asyncio.to_thread(_tiers_per_match, owners, enriched)
 
-    info = {"hex_code": hex_code, "top_matches": top_matches}
-    await HEX_INFO.set(redis, info, hex_code, include_dyes)
+    # Priced at the tier the searched colour earns against *that* item, so a
+    # near-miss is never quoted a perfect match's price.
+    prices = await price_estimates(
+        db,
+        redis,
+        [(m["target_hex"], get_tier(m["delta_e"])) for m in enriched],
+        include_dyes,
+        pieces,
+    )
+
+    for match, users_by_tier, price in zip(enriched, tiers, prices):
+        match["users_by_tier"] = users_by_tier
+        match["price"] = price
+
+    info = {"hex_code": hex_code, "exact_match": exact_match, "top_matches": top_matches}
+    await HEX_INFO.set(redis, info, hex_code, include_dyes, _pieces_key(pieces))
     return info
 
 
 async def get_hex_owners(
-    db: AsyncSession, redis: Redis, hex_code: str, limit: int, offset: int
+    db: AsyncSession,
+    redis: Redis,
+    hex_code: str,
+    limit: int,
+    offset: int,
+    pieces: list[int] | None,
 ) -> dict:
     """One page of the holdings within MAX_DELTA_E of hex_code.
 
@@ -94,6 +130,11 @@ async def get_hex_owners(
         owners = await get_owner_hexes(db, redis)
         matches = await asyncio.to_thread(find_owner_matches, owners, hex_code)
         await OWNER_MATCHES.set(redis, matches, hex_code)
+
+    # Filtered after the cache read, not before: every slot selection shares one
+    # cached scan of the table.
+    if pieces:
+        matches = [m for m in matches if m["piece"] in pieces]
 
     return {
         "total": len(matches),

@@ -251,7 +251,43 @@ KEY_PIECE_HEXES, KEY_PIECE_LABS, KEY_PIECE_TREES = _build_piece_trees(KEY_ITEM_H
 ALL_PIECE_HEXES, ALL_PIECE_LABS, ALL_PIECE_TREES = _build_piece_trees(KEY_ITEM_HEXES, include_dyes=True)
 
 
-def find_top_hex_matches(hex_code: str, limit: int = 3, include_dyes: bool = False) -> list[tuple[str, float]]:
+def _top_matches_for_pieces(
+    hex_code: str, limit: int, include_dyes: bool, pieces: list[int]
+) -> list[tuple[str, float]]:
+    """Nearest catalog colours available on any of `pieces`.
+
+    Per-piece trees rather than filtering the global tree's results: a slot with
+    few items would otherwise need an unbounded k before enough of them survived.
+    """
+    piece_hexes, trees = (
+        (ALL_PIECE_HEXES, ALL_PIECE_TREES) if include_dyes else (KEY_PIECE_HEXES, KEY_PIECE_TREES)
+    )
+    lab = get_lab(hex_code)
+    best: dict[str, float] = {}
+
+    for piece in pieces:
+        if not 0 <= piece < PIECE_COUNT or trees[piece] is None:
+            continue
+        hexes = piece_hexes[piece]
+        k = min(limit, len(hexes))
+        dists, indices = trees[piece].query(lab, k=k)
+        if k == 1:
+            dists, indices = [dists], [indices]
+
+        for i, d in zip(indices, dists):
+            target, distance = hexes[i], float(d)
+            if distance < best.get(target, float("inf")):
+                best[target] = distance
+
+    return sorted(best.items(), key=lambda kv: (kv[1], kv[0]))[:limit]
+
+
+def find_top_hex_matches(
+    hex_code: str, limit: int = 3, include_dyes: bool = False, pieces: list[int] | None = None
+) -> list[tuple[str, float]]:
+    if pieces:
+        return _top_matches_for_pieces(hex_code, limit, include_dyes, pieces)
+
     if USE_PRECOMPUTED and limit == 1:
         idx_arr, de_arr, hex_list = (HEX_MATCH_ALL_IDX, HEX_MATCH_ALL_DE, UNIQUE_ALL_HEXES) if include_dyes else (HEX_MATCH_KEYS_IDX, HEX_MATCH_KEYS_DE, UNIQUE_KEY_HEXES)
         i = int(hex_code, 16)

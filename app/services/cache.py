@@ -82,6 +82,11 @@ AUCTION_COUNT = CacheEntry("auction_count:", AUCTION_TTL)
 # app/services/auction_stats.py.
 AUCTION_STATS = CacheEntry("auction_stats:", AUCTION_TTL)
 
+# Median sale price per catalog colour, for the hex page. Shares the auction
+# TTL, not the hex ones: it goes stale when auctions sync, not when somebody
+# uploads seymours.
+HEX_PRICES = CacheEntry("hex_prices:", AUCTION_TTL)
+
 # Results and filters deliberately share a prefix so invalidating a user's
 # seymours clears both in one scan.
 SEYMOUR_RESULTS = CacheEntry("seymours:", 1800)
