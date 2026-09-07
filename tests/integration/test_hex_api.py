@@ -1,8 +1,8 @@
-"""GET /hex/{hex_code}.
+"""GET /hex/{hex_code} and GET /hex/{hex_code}/owners.
 
-Had no coverage: neither the endpoint, nor HexInfoResponse, nor the tiering pass
-that walks every user's inventory. FFFF00 is an exact Farm Suit colour, so the
-top match is deterministic.
+Had no coverage: neither the endpoint, nor HexInfoResponse, nor the pass that
+walks every user's inventory. FFFF00 is an exact Farm Suit colour, so the top
+match is deterministic; FFFE00 sits at ΔE 0.57 from it and 000000 at 137.
 """
 import pytest
 
@@ -47,21 +47,10 @@ async def test_pieces_and_item_names_serialise_as_indices(client, owners):
         assert all(isinstance(p, int) for p in match["pieces"])
 
 
-async def test_owners_are_bucketed_by_tier_best_first(client, owners):
+async def test_a_match_counts_distinct_owners_inside_the_radius(client, owners):
     top = (await client.get(f"/hex/{TARGET}")).json()["top_matches"][0]
-    tiers = top["users_by_tier"]
 
-    assert [u["username"] for u in tiers["t1"]] == ["exact", "close"]
-    assert [u["delta_e"] for u in tiers["t1"]] == sorted(u["delta_e"] for u in tiers["t1"])
-    assert tiers["t1"][0]["delta_e"] == 0.0
-
-    everyone = [u["username"] for tier in tiers.values() for u in tier]
-    assert "far" not in everyone
-
-
-async def test_discord_id_is_serialised_as_a_string(client, owners):
-    top = (await client.get(f"/hex/{TARGET}")).json()["top_matches"][0]
-    assert top["users_by_tier"]["t1"][0]["discord_id"] == "11"
+    assert top["owner_count"] == 2  # exact and close; far is 137 away
 
 
 @pytest.mark.parametrize("bad", ["ZZZZZZ", "12345", "1234567", "", "nothex"])
@@ -83,6 +72,56 @@ async def test_second_call_is_served_from_cache(client, owners, db):
     assert (await client.get(f"/hex/{TARGET}")).json() == first
 
 
+class TestOwners:
+    """The list is measured against the searched colour, not via the catalog."""
+
+    async def test_only_owners_inside_the_radius_are_listed(self, client, owners):
+        body = (await client.get(f"/hex/{TARGET}/owners")).json()
+
+        assert body["total"] == 2
+        assert [m["username"] for m in body["items"]] == ["exact", "close"]
+        assert body["items"][0]["delta_e"] == 0.0
+
+    async def test_a_holding_carries_its_own_colour_and_piece(self, client, owners):
+        first = (await client.get(f"/hex/{TARGET}/owners")).json()["items"][0]
+
+        assert first["hex_color"] == TARGET
+        assert first["piece"] == Piece.HELMET
+        assert first["quantity"] == 1
+        assert first["discord_id"] == "11"
+
+    async def test_paging_splits_the_list_without_gaps_or_overlap(self, client, owners):
+        first = (await client.get(f"/hex/{TARGET}/owners?limit=1&offset=0")).json()
+        second = (await client.get(f"/hex/{TARGET}/owners?limit=1&offset=1")).json()
+
+        assert first["total"] == second["total"] == 2
+        assert [m["username"] for m in first["items"]] == ["exact"]
+        assert [m["username"] for m in second["items"]] == ["close"]
+
+    async def test_paging_past_the_end_is_empty_not_an_error(self, client, owners):
+        body = (await client.get(f"/hex/{TARGET}/owners?offset=50")).json()
+
+        assert body["total"] == 2
+        assert body["items"] == []
+
+    async def test_identical_holdings_collapse_into_a_quantity(self, client, db):
+        hoarder = User(discord_id=31, username="hoarder", avatar_hash=None)
+        db.add(hoarder)
+        await db.flush()
+        for _ in range(3):
+            db.add(Seymour(user_id=hoarder.id, item_name=Piece.BOOTS, hex_color=TARGET))
+        await db.commit()
+
+        body = (await client.get(f"/hex/{TARGET}/owners")).json()
+
+        assert body["total"] == 1
+        assert body["items"][0]["quantity"] == 3
+
+    @pytest.mark.parametrize("bad", ["ZZZZZZ", "12345", "nothex"])
+    async def test_malformed_hex_is_rejected(self, client, bad):
+        assert (await client.get(f"/hex/{bad}/owners")).status_code in (400, 404)
+
+
 class TestOwnerSnapshot:
     """The owner rows are cached once for all hex codes, not once per code.
 
@@ -98,14 +137,11 @@ class TestOwnerSnapshot:
         await db.execute(Seymour.__table__.delete())
         await db.commit()
 
-        tiers = (await client.get(f"/hex/{TARGET}?include_dyes=true")).json()
-        assert [u["username"] for u in tiers["top_matches"][0]["users_by_tier"]["t1"]] == [
-            "exact",
-            "close",
-        ]
+        body = (await client.get(f"/hex/{TARGET}?include_dyes=true")).json()
+        assert body["top_matches"][0]["owner_count"] == 2
 
     async def test_an_upload_rebuilds_it(self, client, as_user, owners, db, user):
-        await client.get(f"/hex/{TARGET}")
+        await client.get(f"/hex/{TARGET}/owners")
 
         as_user(user)
         upload = await client.post(
@@ -114,12 +150,8 @@ class TestOwnerSnapshot:
         )
         assert upload.json()["imported"] == 1
 
-        names = [
-            u["username"]
-            for u in (await client.get(f"/hex/{TARGET}")).json()["top_matches"][0]
-            ["users_by_tier"]["t1"]
-        ]
-        assert "tester" in names
+        body = (await client.get(f"/hex/{TARGET}/owners")).json()
+        assert "tester" in [m["username"] for m in body["items"]]
 
     async def test_a_delete_rebuilds_it(self, client, as_user, db):
         """Deletes used to skip hex invalidation entirely, so a removed Seymour
@@ -130,10 +162,10 @@ class TestOwnerSnapshot:
         db.add(Seymour(user_id=owner.id, item_name=Piece.HELMET, hex_color=TARGET))
         await db.commit()
 
-        await client.get(f"/hex/{TARGET}")
+        await client.get(f"/hex/{TARGET}/owners")
 
         as_user(owner)
         assert (await client.delete("/seymours/")).status_code == 200
 
-        tiers = (await client.get(f"/hex/{TARGET}")).json()["top_matches"][0]["users_by_tier"]
-        assert "leaver" not in [u["username"] for tier in tiers.values() for u in tier]
+        body = (await client.get(f"/hex/{TARGET}/owners")).json()
+        assert "leaver" not in [m["username"] for m in body["items"]]

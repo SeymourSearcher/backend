@@ -50,11 +50,19 @@ class CacheEntry:
 
 
 CUSTOM_SETS = CacheEntry("custom_sets:", 3600)
-HEX_INFO = CacheEntry("hex_info:", 1800)
+
+# The :v2 suffixes are a payload-shape version, not a namespace: a live v1 blob
+# decodes into the wrong shape rather than failing, so the key has to change
+# whenever the structure does.
+HEX_INFO = CacheEntry("hex_info:v2:", 1800)
 
 # One entry, not one per hex: the payload behind every hex page is the same walk
 # of the whole seymours table. See app/services/owner_hexes.py.
-OWNER_HEXES = CacheEntry("owner_hexes", 1800)
+OWNER_HEXES = CacheEntry("owner_hexes:v2", 1800)
+
+# The full ΔE-sorted owner list for one hex; the endpoint pages over it in
+# Python, so a page flip must not redo the scan.
+OWNER_MATCHES = CacheEntry("owner_matches:", 1800)
 
 # Kept warm while a page is being browsed rather than expiring mid-session.
 USER_SEYMOURS = CacheEntry("user_seymours:", 60, refresh_on_read=True)
@@ -91,9 +99,10 @@ async def invalidate_user_seymours(redis: Redis, user_id: int) -> None:
 
 
 async def invalidate_hex_pages(redis: Redis) -> None:
-    """Both derive from the whole seymours table, so any user's write clears them
-    for every hex code."""
+    """All three derive from the whole seymours table, so any user's write clears
+    them for every hex code."""
     await HEX_INFO.invalidate_all(redis)
+    await OWNER_MATCHES.invalidate_all(redis)
     await OWNER_HEXES.invalidate(redis)
 
 
