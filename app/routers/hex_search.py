@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, Query
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db, get_redis
+from app.dependencies import get_db, get_optional_user, get_redis
+from app.models import User
 from app.pieces import parse_pieces
 from app.rate_limit import RateLimit, limiter
 from app.schemas.hex_search import HexSearchResponse
@@ -26,17 +27,20 @@ router = APIRouter(dependencies=[Depends(limiter(HEX_SEARCH_LIMIT))])
 async def hex_search(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
+    user: Annotated[User | None, Depends(get_optional_user)],
     # A query param, not a path segment: '?' is not path-safe.
     p: str = Query(description="Six-slot pattern: 0-9A-F literal, ? wildcard, G-Z variable"),
     include_dyes: bool = False,
-    owned_only: bool = False,
+    # Ignored for an anonymous caller, who has no holdings to narrow to.
+    mine_only: bool = False,
     tier: TierParam = None,
     pieces: PiecesParam = None,
-    limit: int = Query(50, ge=1, le=100),
-    # Deep paging into 16.7M answers nothing, and the offset is what widens the
-    # tie window the page selection sorts.
+    limit: int = Query(10, ge=1, le=100),
+    # Deep paging answers nothing, and the offset is what widens the tie window
+    # the page selection sorts.
     offset: int = Query(0, ge=0, le=MAX_OFFSET),
 ):
     return await search_hex_pattern(
-        db, redis, p, include_dyes, owned_only, tier, parse_pieces(pieces), limit, offset
+        db, redis, p, include_dyes, mine_only, tier, parse_pieces(pieces),
+        limit, offset, user.id if user else None,
     )

@@ -1,4 +1,4 @@
-"""The six-slot hex pattern grammar, and the colour set a pattern denotes.
+"""The six-slot hex pattern grammar, as a mask over colours.
 
     0-9 A-F a-f   literal digit
     ?             free wildcard
@@ -12,8 +12,10 @@ wildcard and additionally requires distinct variables to bind to distinct
 digits. That one decides which live buy orders are fillable, so it cannot be
 loosened to match this. TODO: fold the two once buy orders can be migrated.
 
-The set is generated rather than filtered -- a predicate over 16.7M colours is
-not affordable, and the free slots already describe the answer exactly.
+Tested against the colours in the database rather than used to enumerate the
+16.7M space: the owned set is four orders of magnitude smaller, so filtering it
+beats generating a pattern's members and intersecting, and it needs no special
+case for a pattern that constrains nothing.
 """
 from dataclasses import dataclass
 
@@ -28,20 +30,17 @@ _LITERALS = "0123456789ABCDEF"
 
 @dataclass(frozen=True)
 class HexPattern:
-    """`base` holds the literal digits, already shifted into place.
-
-    Each free group -- a wildcard slot, or all the slots sharing one variable --
-    contributes one weight, the sum of the position values it occupies. A colour
-    matches iff it is `base` plus some digit times each weight.
-    """
+    """`base` holds the literal digits, already shifted into place, and
+    `literal_mask` marks which nibbles they occupy. `var_groups` lists the shifts
+    of each variable used more than once -- a variable used once constrains
+    nothing and is dropped at parse time, which is why `?????X` spans the whole
+    space exactly as `??????` does."""
 
     raw: str
     base: int
-    weights: tuple[int, ...]
-
-    @property
-    def free(self) -> int:
-        return len(self.weights)
+    literal_mask: int
+    var_groups: tuple[tuple[int, ...], ...]
+    free: int
 
     @property
     def total(self) -> int:
@@ -54,45 +53,40 @@ def parse_pattern(raw: str) -> HexPattern:
         raise InvalidInputError(f"Pattern must be {PATTERN_LENGTH} characters")
 
     base = 0
-    groups: list[int] = []
-    by_variable: dict[str, int] = {}
+    literal_mask = 0
+    by_variable: dict[str, list[int]] = {}
+    free = 0
 
     for slot, char in enumerate(normalised):
-        value = 1 << (4 * (PATTERN_LENGTH - 1 - slot))
+        shift = 4 * (PATTERN_LENGTH - 1 - slot)
         if char in _LITERALS:
-            base += _LITERALS.index(char) * value
+            base += _LITERALS.index(char) << shift
+            literal_mask |= 0xF << shift
         elif char == WILDCARD:
-            groups.append(value)
+            free += 1
         elif "G" <= char <= "Z":
-            seen = by_variable.get(char)
-            if seen is None:
-                by_variable[char] = len(groups)
-                groups.append(value)
-            else:
-                groups[seen] += value
+            if char not in by_variable:
+                by_variable[char] = []
+                free += 1
+            by_variable[char].append(shift)
         else:
             raise InvalidInputError(f"Invalid pattern character {char!r}")
 
-    # Groups are already in order of their most significant slot, which is what
-    # makes colour_indices ascending; sorting descending only restates it.
-    return HexPattern(normalised, base, tuple(sorted(groups, reverse=True)))
+    groups = tuple(tuple(shifts) for shifts in by_variable.values() if len(shifts) > 1)
+    return HexPattern(normalised, base, literal_mask, groups, free)
 
 
-def colour_indices(pattern: HexPattern) -> np.ndarray:
-    """Every colour the pattern matches, ascending.
+def matches(pattern: HexPattern, colours: np.ndarray) -> np.ndarray:
+    """Boolean mask over `colours` (uint32 0xRRGGBB) of the ones that match."""
+    colours = np.asarray(colours, dtype=np.uint32)
+    ok = np.ones(len(colours), dtype=bool)
 
-    Ascending is load-bearing -- intersect1d, searchsorted and the hex tiebreak
-    (a stable sort keyed on ΔE alone) all assume it. It holds because a group
-    owning slot i has weight >= 16**(5-i), while every later group owns only
-    slots after i and so sums to at most 16**(5-i) - 1: one step of the earlier
-    group always outruns the later ones combined.
-    """
-    if pattern.free == PATTERN_LENGTH:
-        raise ValueError("Unconstrained pattern; the caller must slice the ordered index")
+    if pattern.literal_mask:
+        ok &= (colours & np.uint32(pattern.literal_mask)) == np.uint32(pattern.base)
 
-    n = pattern.total
-    codes = np.arange(n, dtype=np.uint32)
-    out = np.full(n, pattern.base, dtype=np.uint32)
-    for k, weight in enumerate(pattern.weights):
-        out += ((codes >> (4 * (pattern.free - 1 - k))) & 0xF) * np.uint32(weight)
-    return out
+    for shifts in pattern.var_groups:
+        first = (colours >> np.uint32(shifts[0])) & np.uint32(0xF)
+        for shift in shifts[1:]:
+            ok &= first == ((colours >> np.uint32(shift)) & np.uint32(0xF))
+
+    return ok

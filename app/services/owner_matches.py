@@ -100,17 +100,27 @@ def find_owner_matches(
     return sorted(grouped.values(), key=lambda m: (m["delta_e"], m["username"]))
 
 
-def _rows_for_pieces(owners: OwnerHexes, pieces: list[int] | None) -> np.ndarray:
+def _rows_for(
+    owners: OwnerHexes, pieces: list[int] | None, user_id: int | None = None
+) -> np.ndarray:
     rows = np.arange(len(owners.hexes))
-    if not pieces:
-        return rows
-    return rows[np.isin(np.frombuffer(owners.pieces, dtype=np.uint8), pieces)]
+    if pieces:
+        rows = rows[np.isin(np.frombuffer(owners.pieces, dtype=np.uint8)[rows], pieces)]
+    if user_id is not None:
+        index = next((i for i, u in enumerate(owners.users) if u[0] == user_id), None)
+        # An unknown user owns nothing, rather than everything.
+        if index is None:
+            return rows[:0]
+        rows = rows[np.frombuffer(owners.idx, dtype=np.uint32)[rows] == index]
+    return rows
 
 
-def owned_colours(owners: OwnerHexes, pieces: list[int] | None = None) -> np.ndarray:
-    """The distinct colours anyone holds, ascending."""
+def owned_colours(
+    owners: OwnerHexes, pieces: list[int] | None = None, user_id: int | None = None
+) -> np.ndarray:
+    """The distinct colours held, ascending. Scoped to one user when given."""
     hexes = np.frombuffer(owners.hexes, dtype=np.uint32)
-    return np.unique(hexes[_rows_for_pieces(owners, pieces)])
+    return np.unique(hexes[_rows_for(owners, pieces, user_id)])
 
 
 def owners_by_hex(
@@ -130,7 +140,7 @@ def owners_by_hex(
     idx = np.frombuffer(owners.idx, dtype=np.uint32)
     piece_of = np.frombuffer(owners.pieces, dtype=np.uint8)
 
-    rows = _rows_for_pieces(owners, pieces)
+    rows = _rows_for(owners, pieces)
     order = rows[np.argsort(hexes[rows], kind="stable")]
     sorted_hexes = hexes[order]
 

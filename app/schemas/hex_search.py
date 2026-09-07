@@ -15,11 +15,11 @@ class HexSearchOwner(PublicUser):
 
 
 class HexSearchResult(BaseModel):
-    """A colour the pattern matches, and its nearest catalog item.
+    """A held colour the pattern matches, and its nearest catalog item.
 
-    target_name is null for a catalog colour with no set or dye name. owners is
-    empty for most rows -- the search spans the whole colour space, so ownership
-    is an annotation rather than a filter.
+    Every row has at least one owner -- the search filters the seymours snapshot
+    rather than the colour space. target_name is null for a catalog colour with
+    no set or dye name.
     """
     hex_code: str
     target_name: str | None
@@ -28,15 +28,23 @@ class HexSearchResult(BaseModel):
     tier: str | None
     owners: list[HexSearchOwner]
     owner_count: int
+    # False for an anonymous caller, who owns nothing as far as this endpoint knows.
+    owned_by_me: bool
 
 
 class HexSearchResponse(BaseModel):
-    """pattern_total is what the pattern denotes (16 ** free slots); total is
-    what survived the tier and ownership filters and is what offset pages over.
-    They diverge whenever a filter is on, and the UI shows both."""
+    """pattern_total is what the pattern denotes across the whole colour space
+    (16 ** free slots); total is how many of those anyone actually holds, after
+    the tier and piece filters. The gap between them is the point -- it says how
+    rare the pattern is.
+
+    mine_only reports what was actually applied, which is False for an anonymous
+    caller even when the request asked for it.
+    """
     pattern: str
     pattern_total: int
     total: int
+    mine_only: bool
     limit: int
     offset: int
     items: list[HexSearchResult]
