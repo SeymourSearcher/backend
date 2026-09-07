@@ -8,7 +8,12 @@ import numpy as np
 
 from app.services.compute import ALL_LAB, get_lab
 from app.services.owner_hexes import _build
-from app.services.owner_matches import find_owner_matches, tier_users
+from app.services.owner_matches import (
+    find_owner_matches,
+    owned_colours,
+    owners_by_hex,
+    tier_users,
+)
 
 SEARCH = "FFFF00"
 
@@ -147,6 +152,92 @@ class TestTiers:
         listed = {m["username"] for m in find_owner_matches(table, SEARCH)}
 
         assert t1 == listed == {"inside"}
+
+
+class TestOwnersByHex:
+    """Exact-colour ownership, as the pattern search annotates its rows."""
+
+    def test_a_colour_nobody_holds_gets_an_empty_list(self):
+        table = owners((1, "someone", "FFFF00", 0))
+
+        assert owners_by_hex(table, np.array([0x000000])) == {0x000000: []}
+
+    def test_a_user_collapses_to_one_entry_carrying_every_piece(self):
+        table = owners(
+            (1, "collector", "FFFF00", 0),
+            (1, "collector", "FFFF00", 2),
+            (1, "collector", "FFFF00", 2),
+        )
+
+        entry = owners_by_hex(table, np.array([0xFFFF00]))[0xFFFF00][0]
+
+        assert entry["pieces"] == [0, 2]
+        assert entry["quantity"] == 3
+        assert entry["discord_id"] == "101"
+
+    def test_only_the_exact_colour_counts(self):
+        """Neighbours are the radius question; this one is equality."""
+        table = owners(
+            (1, "exact", "FFFF00", 0),
+            (2, "adjacent", "FFFE00", 0),
+        )
+
+        found = owners_by_hex(table, np.array([0xFFFF00]))
+
+        assert [o["username"] for o in found[0xFFFF00]] == ["exact"]
+
+    def test_owners_are_alphabetical(self):
+        table = owners(
+            (1, "zoe", "FFFF00", 0),
+            (2, "adam", "FFFF00", 0),
+        )
+
+        assert [o["username"] for o in owners_by_hex(table, np.array([0xFFFF00]))[0xFFFF00]] == [
+            "adam", "zoe",
+        ]
+
+    def test_the_piece_filter_drops_holdings_on_other_slots(self):
+        table = owners(
+            (1, "helmetonly", "FFFF00", 0),
+            (2, "bootsonly", "FFFF00", 3),
+        )
+
+        found = owners_by_hex(table, np.array([0xFFFF00]), pieces=[3])
+
+        assert [o["username"] for o in found[0xFFFF00]] == ["bootsonly"]
+
+    def test_an_out_of_range_piece_matches_nothing_rather_than_widening(self):
+        table = owners((1, "someone", "FFFF00", 0))
+
+        assert owners_by_hex(table, np.array([0xFFFF00]), pieces=[9]) == {0xFFFF00: []}
+
+    def test_every_requested_colour_is_a_key(self):
+        table = owners((1, "someone", "FFFF00", 0))
+        wanted = np.array([0x000000, 0xFFFF00, 0xFFFFFF])
+
+        assert sorted(owners_by_hex(table, wanted)) == sorted(wanted.tolist())
+
+
+class TestOwnedColours:
+    def test_distinct_and_ascending(self):
+        table = owners(
+            (1, "a", "FFFF00", 0),
+            (2, "b", "FFFF00", 1),
+            (3, "c", "000000", 0),
+        )
+
+        assert owned_colours(table).tolist() == [0x000000, 0xFFFF00]
+
+    def test_the_piece_filter_applies(self):
+        table = owners(
+            (1, "a", "FFFF00", 0),
+            (2, "b", "000000", 3),
+        )
+
+        assert owned_colours(table, pieces=[3]).tolist() == [0x000000]
+
+    def test_an_empty_table_yields_an_empty_array(self):
+        assert owned_colours(owners()).tolist() == []
 
 
 def test_the_lab_table_covers_the_whole_colour_space():

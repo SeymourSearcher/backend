@@ -17,6 +17,7 @@ from app.pieces import Piece
 from app.rate_limit import GLOBAL_LIMIT, KEY_PREFIX, RateLimit
 from app.routers.auth import CALLBACK_LIMIT
 from app.routers.hex import HEX_LIMIT
+from app.routers.hex_search import HEX_SEARCH_LIMIT
 from app.services import auth, custom_sets
 
 pytestmark = pytest.mark.integration
@@ -69,6 +70,26 @@ async def test_the_hex_pages_have_their_own_tighter_limit(client, redis):
     allowed = await client.get("/hex/FF0000", headers=sent_from(OTHER_CALLER))
 
     assert (refused.status_code, allowed.status_code) == (429, 200)
+
+
+async def test_pattern_search_is_tighter_still(client, redis):
+    """Nothing caches it at all, and one request can gather ΔE for a million
+    colours -- so its ceiling sits below the hex pages', not just below global."""
+    assert HEX_SEARCH_LIMIT.limit < HEX_LIMIT.limit
+    await exhaust(redis, HEX_SEARCH_LIMIT)
+
+    refused = await client.get("/hex-search?p=21????", headers=sent_from(CALLER))
+    allowed = await client.get("/hex-search?p=21????", headers=sent_from(OTHER_CALLER))
+
+    assert (refused.status_code, allowed.status_code) == (429, 200)
+
+
+async def test_pattern_search_does_not_spend_the_hex_page_budget(client, redis):
+    """Separate buckets: exploring patterns must not lock the caller out of the
+    colour pages they navigate to from the results."""
+    await exhaust(redis, HEX_SEARCH_LIMIT)
+
+    assert (await client.get("/hex/FF0000", headers=sent_from(CALLER))).status_code == 200
 
 
 async def test_the_login_callback_is_throttled(client, redis, monkeypatch):

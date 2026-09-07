@@ -98,3 +98,66 @@ def find_owner_matches(
 
     # Username breaks ties so paging over the list is stable.
     return sorted(grouped.values(), key=lambda m: (m["delta_e"], m["username"]))
+
+
+def _rows_for_pieces(owners: OwnerHexes, pieces: list[int] | None) -> np.ndarray:
+    rows = np.arange(len(owners.hexes))
+    if not pieces:
+        return rows
+    return rows[np.isin(np.frombuffer(owners.pieces, dtype=np.uint8), pieces)]
+
+
+def owned_colours(owners: OwnerHexes, pieces: list[int] | None = None) -> np.ndarray:
+    """The distinct colours anyone holds, ascending."""
+    hexes = np.frombuffer(owners.hexes, dtype=np.uint32)
+    return np.unique(hexes[_rows_for_pieces(owners, pieces)])
+
+
+def owners_by_hex(
+    owners: OwnerHexes, colours: np.ndarray, pieces: list[int] | None = None
+) -> dict[int, list[dict]]:
+    """Who holds each of `colours`, keyed by colour.
+
+    Unlike find_owner_matches this asks about exact colours rather than a
+    radius, so there is no ΔE to rank by and a user collapses to one entry
+    carrying every piece they hold it on.
+
+    Sorting the table once and bisecting keeps this independent of how many
+    colours are asked about -- callers pass one page, but the table is the whole
+    seymours snapshot either way.
+    """
+    hexes = np.frombuffer(owners.hexes, dtype=np.uint32)
+    idx = np.frombuffer(owners.idx, dtype=np.uint32)
+    piece_of = np.frombuffer(owners.pieces, dtype=np.uint8)
+
+    rows = _rows_for_pieces(owners, pieces)
+    order = rows[np.argsort(hexes[rows], kind="stable")]
+    sorted_hexes = hexes[order]
+
+    colours = np.asarray(colours, dtype=np.uint32)
+    lo = np.searchsorted(sorted_hexes, colours, side="left")
+    hi = np.searchsorted(sorted_hexes, colours, side="right")
+
+    result: dict[int, list[dict]] = {}
+    for colour, start, end in zip(colours.tolist(), lo.tolist(), hi.tolist()):
+        by_user: dict[int, dict] = {}
+        for row in order[start:end].tolist():
+            user_index = int(idx[row])
+            entry = by_user.get(user_index)
+            if entry is None:
+                _, username, discord_id, avatar_hash = owners.users[user_index]
+                entry = by_user[user_index] = {
+                    "username": username,
+                    "discord_id": str(discord_id),
+                    "avatar_hash": avatar_hash,
+                    "pieces": set(),
+                    "quantity": 0,
+                }
+            entry["pieces"].add(int(piece_of[row]))
+            entry["quantity"] += 1
+
+        for entry in by_user.values():
+            entry["pieces"] = sorted(entry["pieces"])
+        result[colour] = sorted(by_user.values(), key=lambda o: o["username"])
+
+    return result
