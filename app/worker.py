@@ -37,7 +37,9 @@ async def main() -> None:
             # Windows dev: fall back to KeyboardInterrupt handling below.
             pass
 
-    sync = asyncio.create_task(asyncio.gather(start_sync_loop(), player_refresh_loop()))
+    # gather() already schedules its own tasks and returns a Future, so it must not be
+    # wrapped in create_task() -- that rejects anything that isn't a bare coroutine.
+    sync = asyncio.gather(start_sync_loop(), player_refresh_loop())
     logger.info("Auction sync worker started")
 
     await asyncio.wait([sync, stop], return_when=asyncio.FIRST_COMPLETED)

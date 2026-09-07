@@ -6,9 +6,14 @@ app/services/stats.py (the tallies are a snapshot, not a view):
     python -m scripts.backfill_user_stats            # only users with no row
     python -m scripts.backfill_user_stats --all      # recompute everyone
 
+This also rebuilds user_custom_sets, since refresh_user_stats writes both. Use
+--all to populate them after migration b3e7c9a15d84: the default selects on a
+missing user_stats row, which a user tallied before that migration still has.
+
 One user at a time, because that is also how the live path recomputes them: a
 user's stats depend only on their own Seymours. Roughly 600ms for all 32 users
-on prod, dominated by the largest collection.
+on prod before the custom-set search was added, dominated by the largest
+collection either way.
 """
 import argparse
 import asyncio

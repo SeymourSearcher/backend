@@ -25,16 +25,20 @@ class UserStatsRepository(BaseRepository):
     async def get(self, user_id: int) -> UserStats | None:
         return await self.session.get(UserStats, user_id)
 
-    async def list_ranked(self) -> list[tuple[User, UserStats]]:
-        """Every tallied user, biggest collection first.
+    async def list_ranked(
+        self, sort_key: str, limit: int
+    ) -> list[tuple[User, UserStats]]:
+        """The top `limit` tallied users by `sort_key`, biggest first.
 
         Users with no stats row have never uploaded, so they are absent rather
-        than shown as zeroes.
+        than shown as zeroes. `sort_key` must be one of STAT_KEYS -- callers get
+        it from the RankingSort enum, so it is never raw input.
         """
         rows = await self.session.execute(
             select(User, UserStats)
             .join(UserStats, User.id == UserStats.user_id)
-            .order_by(UserStats.total_seymours.desc(), User.id)
+            .order_by(getattr(UserStats, sort_key).desc(), User.id)
+            .limit(limit)
         )
         return [(user, stats) for user, stats in rows.all()]
 

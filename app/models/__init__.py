@@ -1,5 +1,6 @@
 from app.models.user import User
 from app.models.user_stats import UserStats
+from app.models.user_custom_set import UserCustomSet
 from app.models.seymour import Seymour
 from app.models.marketplace import (
     BuyOrder,
@@ -17,6 +18,7 @@ from app.models.player import Player
 __all__ = [
     "User",
     "UserStats",
+    "UserCustomSet",
     "Seymour",
     "BuyOrder",
     "BuyOrderSetCriteria",

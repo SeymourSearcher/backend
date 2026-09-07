@@ -79,11 +79,28 @@ async def test_rankings_carry_stats_plus_user_fields(client, inventories):
 
 
 async def test_global_stats_are_the_sum_of_the_rankings(client, inventories):
+    """Only holds below RANKING_LIMIT -- /stats/ sums every user, the board caps."""
     rankings = (await client.get("/stats/rankings")).json()
     globals_ = (await client.get("/stats/")).json()
 
     for key in STAT_KEYS:
         assert globals_[key] == sum(r[key] for r in rankings), key
+
+
+async def test_rankings_sort_by_the_requested_stat(client, inventories):
+    rows = (await client.get("/stats/rankings?sort_by=t1")).json()
+
+    assert [r["t1"] for r in rows] == sorted((r["t1"] for r in rows), reverse=True)
+
+
+async def test_rankings_reject_an_unknown_sort_key(client):
+    assert (await client.get("/stats/rankings?sort_by=username")).status_code == 422
+
+
+async def test_rankings_are_capped(client, inventories, monkeypatch):
+    monkeypatch.setattr("app.services.rankings.RANKING_LIMIT", 1)
+
+    assert len(((await client.get("/stats/rankings")).json())) == 1
 
 
 async def test_stats_are_zero_when_nobody_has_uploaded(client):

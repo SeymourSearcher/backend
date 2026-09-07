@@ -17,7 +17,12 @@ from app.models import User
 from app.models.user_stats import STAT_KEYS
 from app.repositories.seymour_repo import SeymourRepository
 from app.repositories.user_stats_repo import UserStatsRepository
+from app.services.custom_sets import refresh_user_custom_sets
 from app.services.stats import get_stats
+
+# The leaderboard is a top-N board, not a directory: the client renders this
+# many rows, so shipping more is waste.
+RANKING_LIMIT = 25
 
 # get_stats fans out over threads internally, so one to_thread call keeps the
 # event loop free. Deliberately not a ProcessPoolExecutor: each worker would
@@ -33,13 +38,15 @@ def _as_dict(stats) -> dict:
 
 
 async def refresh_user_stats(db: AsyncSession, user_id: int) -> dict:
-    """Recompute and store one user's stats. Call after their Seymours change.
+    """Recompute and store one user's stats and featured sets.
 
-    Costs one user's compute -- 86ms for the largest collection on prod, 3ms
-    for most -- rather than everyone's.
+    Call after their Seymours change. Costs one user's compute -- 86ms for the
+    largest collection on prod, 3ms for most -- rather than everyone's, plus the
+    custom-set search, which is the heavier of the two.
     """
     seymours = await SeymourRepository(db).list_for_user(user_id)
-    stats = await _compute_stats([(s.hex_color, s.item_name) for s in seymours])
+    seymour_list = [(s.hex_color, s.item_name) for s in seymours]
+    stats = await _compute_stats(seymour_list)
 
     repo = UserStatsRepository(db)
     if seymours:
@@ -48,6 +55,10 @@ async def refresh_user_stats(db: AsyncSession, user_id: int) -> dict:
         # No row rather than a row of zeroes: the leaderboard has only ever
         # listed users holding at least one Seymour.
         await repo.delete_for_user(user_id)
+
+    # Empty list included: this is also what clears the rows of a user who just
+    # deleted their collection.
+    await refresh_user_custom_sets(db, user_id, seymour_list)
 
     await db.commit()
     return stats
@@ -62,7 +73,7 @@ async def user_stats(db: AsyncSession, user: User) -> dict:
     return _as_dict(stored)
 
 
-async def rankings(db: AsyncSession) -> list[dict]:
+async def rankings(db: AsyncSession, sort_key: str = "total_seymours") -> list[dict]:
     return [
         {
             "discord_id": str(user.discord_id),
@@ -70,7 +81,7 @@ async def rankings(db: AsyncSession) -> list[dict]:
             "avatar_hash": user.avatar_hash,
             **_as_dict(stats),
         }
-        for user, stats in await UserStatsRepository(db).list_ranked()
+        for user, stats in await UserStatsRepository(db).list_ranked(sort_key, RANKING_LIMIT)
     ]
 
 

@@ -21,6 +21,9 @@ class User(Base):
     stats: Mapped["UserStats"] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
+    custom_sets: Mapped[list["UserCustomSet"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
     buy_orders: Mapped[list["BuyOrder"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     sell_orders: Mapped[list["SellOrder"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
