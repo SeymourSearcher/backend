@@ -18,6 +18,7 @@ from app.services.compute import ITEM_TO_INFO, find_top_hex_matches
 from app.services.hex_prices import price_estimates
 from app.pieces import Piece
 from app.services.matching import (
+    compute_abs_diff,
     dye_label_for_hex,
     get_tier,
     key_item_for_hex,
@@ -36,22 +37,30 @@ def validate_hex(hex_code: str) -> str:
     return hex_code
 
 
-def build_match_info(target_hex: str, de: float, include_dyes: bool = False) -> dict | None:
+def build_match_info(
+    search_hex: str, target_hex: str, de: float, include_dyes: bool = False
+) -> dict | None:
+    # Two distances, deliberately: ΔE is perceptual and drives the tiers, ABS is
+    # the raw RGB gap people read off the hex codes themselves.
+    common = {
+        "target_hex": target_hex,
+        "delta_e": round(de, 2),
+        "abs_diff": compute_abs_diff(search_hex, target_hex),
+    }
+
     item_name = key_item_for_hex(target_hex)
     if item_name is not None:
         return {
+            **common,
             "target_name": set_name_for_hex(target_hex),
-            "target_hex": target_hex,
-            "delta_e": round(de, 2),
             "pieces": ITEM_TO_INFO.get(item_name, {}).get("pieces", []),
         }
 
     dye_label = dye_label_for_hex(target_hex, with_stage=True) if include_dyes else None
     if dye_label is not None:
         return {
+            **common,
             "target_name": dye_label,
-            "target_hex": target_hex,
-            "delta_e": round(de, 2),
             # A dye colour is available on every piece.
             "pieces": list(Piece),
         }
@@ -81,7 +90,9 @@ async def get_hex_info(
     raw_matches = await asyncio.to_thread(
         find_top_hex_matches, hex_code, CATALOG_MATCHES + 1, include_dyes, pieces
     )
-    matches = [m for t, d in raw_matches if (m := build_match_info(t, d, include_dyes))]
+    matches = [
+        m for t, d in raw_matches if (m := build_match_info(hex_code, t, d, include_dyes))
+    ]
 
     exact_match = next((m for m in matches if m["target_hex"] == hex_code), None)
     top_matches = [m for m in matches if m is not exact_match][:CATALOG_MATCHES]

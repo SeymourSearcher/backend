@@ -30,6 +30,8 @@ class HexMatchResponse(BaseModel):
     target_name: str
     target_hex: str
     delta_e: float
+    # Manhattan distance in RGB, alongside the perceptual ΔE above.
+    abs_diff: int
     pieces: list[Piece]
     users_by_tier: HexUsersByTier
     price: HexPrice

@@ -78,6 +78,34 @@ async def test_a_match_buckets_its_owners_by_tier(client, owners):
     assert "far" not in everyone  # 000000 is 137 away
 
 
+async def test_an_exact_match_is_zero_by_both_measures(client, owners):
+    exact = (await client.get(f"/hex/{TARGET}")).json()["exact_match"]
+
+    assert exact["delta_e"] == 0.0
+    assert exact["abs_diff"] == 0
+
+
+async def test_abs_diff_is_the_rgb_gap_to_that_target(client, owners):
+    """Manhattan RGB, measured from the searched colour -- not from each other."""
+    body = (await client.get("/hex/FFFE00")).json()
+
+    for match in body["top_matches"]:
+        target = match["target_hex"]
+        expected = sum(
+            abs(int("FFFE00"[i:i + 2], 16) - int(target[i:i + 2], 16)) for i in (0, 2, 4)
+        )
+        assert match["abs_diff"] == expected
+
+
+async def test_the_two_distances_move_independently(client, owners):
+    """ABS is not a restatement of ΔE: equal RGB steps are not equal perceptually,
+    so the pair must not be a fixed ratio."""
+    matches = (await client.get("/hex/A3F2C1")).json()["top_matches"]
+    ratios = {round(m["abs_diff"] / m["delta_e"], 3) for m in matches if m["delta_e"] > 0}
+
+    assert len(ratios) > 1
+
+
 async def test_every_match_carries_a_price_slot(client, owners):
     """No auctions exist in this schema, so the honest answer is None, not 0."""
     body = (await client.get(f"/hex/{TARGET}")).json()

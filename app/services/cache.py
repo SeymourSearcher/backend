@@ -54,7 +54,7 @@ CUSTOM_SETS = CacheEntry("custom_sets:", 3600)
 # The :v2 suffixes are a payload-shape version, not a namespace: a live v1 blob
 # decodes into the wrong shape rather than failing, so the key has to change
 # whenever the structure does.
-HEX_INFO = CacheEntry("hex_info:v3:", 1800)
+HEX_INFO = CacheEntry("hex_info:v4:", 1800)
 
 # One entry, not one per hex: the payload behind every hex page is the same walk
 # of the whole seymours table. See app/services/owner_hexes.py.
