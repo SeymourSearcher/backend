@@ -9,8 +9,8 @@ from app.services.cache import HEX_INFO, OWNER_MATCHES
 from app.services.owner_hexes import get_owner_hexes
 from app.services.owner_matches import (
     MAX_DELTA_E,
-    count_owners_within,
     find_owner_matches,
+    tier_users,
 )
 from app.services.compute import ITEM_TO_INFO, find_top_hex_matches
 from app.pieces import Piece
@@ -53,8 +53,8 @@ def build_match_info(target_hex: str, de: float, include_dyes: bool = False) -> 
     return None
 
 
-def _owner_counts(owners, top_matches: list[dict]) -> list[int]:
-    return [count_owners_within(owners, m["target_hex"]) for m in top_matches]
+def _tiers_per_match(owners, top_matches: list[dict]) -> list[dict]:
+    return [tier_users(owners, m["target_hex"]) for m in top_matches]
 
 
 async def get_hex_info(
@@ -70,9 +70,9 @@ async def get_hex_info(
     top_matches = [m for t, d in raw_matches if (m := build_match_info(t, d, include_dyes))]
 
     owners = await get_owner_hexes(db, redis)
-    counts = await asyncio.to_thread(_owner_counts, owners, top_matches)
-    for match, count in zip(top_matches, counts):
-        match["owner_count"] = count
+    tiers = await asyncio.to_thread(_tiers_per_match, owners, top_matches)
+    for match, users_by_tier in zip(top_matches, tiers):
+        match["users_by_tier"] = users_by_tier
 
     info = {"hex_code": hex_code, "top_matches": top_matches}
     await HEX_INFO.set(redis, info, hex_code, include_dyes)

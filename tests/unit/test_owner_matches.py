@@ -2,13 +2,13 @@
 
 Distances from FFFF00, to save recomputing them while reading:
     FFFF00 0.00   FFFF05 0.34   FEFF00 0.43   FFFE00 0.57
-    FFFA00 2.87   F0FF00 6.36   000000 137.21
+    FFFA00 2.87   F0FF00 6.36   FFE800 13.32   000000 137.21
 """
 import numpy as np
 
 from app.services.compute import ALL_LAB, get_lab
 from app.services.owner_hexes import _build
-from app.services.owner_matches import count_owners_within, find_owner_matches
+from app.services.owner_matches import find_owner_matches, tier_users
 
 SEARCH = "FFFF00"
 
@@ -88,23 +88,65 @@ def test_a_match_carries_its_own_colour_not_the_searched_one():
     assert match["delta_e"] == round(distance("FFFE00"), 2)
 
 
-def test_the_count_is_distinct_users_not_holdings():
-    table = owners(
-        (1, "hoarder", "FFFE00", 0),
-        (1, "hoarder", "FEFF00", 1),
-        (1, "hoarder", "FFFF05", 2),
-        (2, "other", "FFFF00", 0),
-        (3, "far", "F0FF00", 0),
-    )
-
-    assert count_owners_within(table, SEARCH) == 2
-
-
 def test_an_empty_table_yields_nothing():
     table = owners()
 
     assert find_owner_matches(table, SEARCH) == []
-    assert count_owners_within(table, SEARCH) == 0
+    assert tier_users(table, SEARCH) == {"t1": [], "t2": [], "t3": []}
+
+
+class TestTiers:
+    """FFFA00 is 2.87 away (t2), F0FF00 is 6.36 (t3), FFE800 is 13.32 (nowhere)."""
+
+    def test_users_land_in_the_tier_their_distance_earns(self):
+        table = owners(
+            (1, "onthenose", "FFFF00", 0),
+            (2, "middling", "FFFA00", 0),
+            (3, "distant", "F0FF00", 0),
+            (4, "offscale", "FFE800", 0),
+        )
+
+        tiers = tier_users(table, SEARCH)
+
+        assert [u["username"] for u in tiers["t1"]] == ["onthenose"]
+        assert [u["username"] for u in tiers["t2"]] == ["middling"]
+        assert [u["username"] for u in tiers["t3"]] == ["distant"]
+
+    def test_a_user_appears_once_at_their_closest_holding(self):
+        """Owning a t3 piece as well as a t1 one must not list them twice."""
+        table = owners(
+            (1, "collector", "FFFF00", 0),
+            (1, "collector", "F0FF00", 1),
+        )
+
+        tiers = tier_users(table, SEARCH)
+
+        assert [u["username"] for u in tiers["t1"]] == ["collector"]
+        assert tiers["t2"] == [] and tiers["t3"] == []
+        assert tiers["t1"][0]["delta_e"] == 0.0
+
+    def test_each_tier_is_closest_first(self):
+        table = owners(
+            (1, "further", "FFFE00", 0),
+            (2, "nearer", "FFFF05", 0),
+        )
+
+        assert [u["username"] for u in tier_users(table, SEARCH)["t1"]] == [
+            "nearer", "further",
+        ]
+
+    def test_the_t1_bucket_matches_the_owners_list_radius(self):
+        """T1 is ΔE 0-2, so its members are exactly the users find_owner_matches
+        surfaces -- the page shows one count, not two that disagree."""
+        table = owners(
+            (1, "inside", "FFFE00", 0),
+            (2, "outside", "FFFA00", 0),
+        )
+
+        t1 = {u["username"] for u in tier_users(table, SEARCH)["t1"]}
+        listed = {m["username"] for m in find_owner_matches(table, SEARCH)}
+
+        assert t1 == listed == {"inside"}
 
 
 def test_the_lab_table_covers_the_whole_colour_space():

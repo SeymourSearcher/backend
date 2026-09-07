@@ -47,10 +47,15 @@ async def test_pieces_and_item_names_serialise_as_indices(client, owners):
         assert all(isinstance(p, int) for p in match["pieces"])
 
 
-async def test_a_match_counts_distinct_owners_inside_the_radius(client, owners):
-    top = (await client.get(f"/hex/{TARGET}")).json()["top_matches"][0]
+async def test_a_match_buckets_its_owners_by_tier(client, owners):
+    tiers = (await client.get(f"/hex/{TARGET}")).json()["top_matches"][0]["users_by_tier"]
 
-    assert top["owner_count"] == 2  # exact and close; far is 137 away
+    assert [u["username"] for u in tiers["t1"]] == ["exact", "close"]
+    assert tiers["t1"][0]["delta_e"] == 0.0
+    assert tiers["t1"][0]["discord_id"] == "11"
+
+    everyone = [u["username"] for tier in tiers.values() for u in tier]
+    assert "far" not in everyone  # 000000 is 137 away
 
 
 @pytest.mark.parametrize("bad", ["ZZZZZZ", "12345", "1234567", "", "nothex"])
@@ -138,7 +143,8 @@ class TestOwnerSnapshot:
         await db.commit()
 
         body = (await client.get(f"/hex/{TARGET}?include_dyes=true")).json()
-        assert body["top_matches"][0]["owner_count"] == 2
+        tiers = body["top_matches"][0]["users_by_tier"]
+        assert [u["username"] for u in tiers["t1"]] == ["exact", "close"]
 
     async def test_an_upload_rebuilds_it(self, client, as_user, owners, db, user):
         await client.get(f"/hex/{TARGET}/owners")
