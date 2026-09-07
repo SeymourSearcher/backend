@@ -121,6 +121,34 @@ class TestAuctionStats:
     async def test_malformed_hex_is_rejected(self, client, bad):
         assert (await client.get(f"/hex/{bad}/auction-stats")).status_code in (400, 404)
 
+    @pytest.mark.parametrize("tier", ["t1", "t2", "t3"])
+    async def test_an_explicit_tier_overrides_the_searched_one(self, client, owners, tier):
+        body = (await client.get(f"/hex/{TARGET}/auction-stats?tier={tier}")).json()
+
+        assert body["tier"] == tier
+        # The colour's own band is still reported, so the UI can mark the default.
+        assert body["search_tier"] == "t1"
+
+    async def test_asking_for_every_tier_drops_the_band(self, client, owners):
+        body = (await client.get(f"/hex/{TARGET}/auction-stats?tier=all")).json()
+
+        assert body["tier"] is None
+        assert body["search_tier"] == "t1"
+
+    @pytest.mark.parametrize("searched", [TARGET, "FFFA00", "7F00FF"])
+    async def test_naming_a_tier_prices_it_whatever_the_colour_earns(self, client, owners, searched):
+        """The override is independent of the searched band, so a colour with no
+        band of its own is still explorable."""
+        default = (await client.get(f"/hex/{searched}/auction-stats")).json()
+        chosen = (await client.get(f"/hex/{searched}/auction-stats?tier=t2")).json()
+
+        assert chosen["tier"] == "t2"
+        assert chosen["target_hex"] == default["target_hex"]
+        assert chosen["search_tier"] == default["search_tier"]
+
+    async def test_an_unknown_tier_is_rejected(self, client):
+        assert (await client.get(f"/hex/{TARGET}/auction-stats?tier=t9")).status_code == 422
+
 
 class TestPieceFilter:
     async def test_matches_are_restricted_to_the_chosen_slots(self, client, owners):

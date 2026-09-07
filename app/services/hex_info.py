@@ -129,33 +129,48 @@ def _empty_stats() -> dict:
     }
 
 
+ALL_TIERS = "all"
+
+
 async def get_hex_auction_stats(
-    db: AsyncSession, redis: Redis, hex_code: str, include_dyes: bool, pieces: list[int] | None
+    db: AsyncSession,
+    redis: Redis,
+    hex_code: str,
+    include_dyes: bool,
+    pieces: list[int] | None,
+    tier: str | None = None,
 ) -> dict:
-    """Full sale statistics for the colour a search resolves to.
+    """Sale statistics for the colour a search resolves to.
 
     Same reference the hero prices -- the exact catalog colour when there is
     one, otherwise the nearest -- so the section elaborates on the headline
     figure rather than quoting a different one.
+
+    tier overrides which band is priced: a tier key to inspect another one, or
+    ALL_TIERS for the item's whole range. Left unset it follows the searched
+    colour, which is what makes the default agree with the hero.
     """
     info = await get_hex_info(db, redis, hex_code, include_dyes, pieces)
     reference = info["exact_match"] or next(iter(info["top_matches"]), None)
-    tier = get_tier(reference["delta_e"]) if reference else None
+    search_tier = get_tier(reference["delta_e"]) if reference else None
 
+    applied = None if tier == ALL_TIERS else (tier or search_tier)
     context = {
         "target_name": reference["target_name"] if reference else None,
         "target_hex": reference["target_hex"] if reference else None,
-        "tier": tier,
+        "search_tier": search_tier,
+        "tier": applied,
     }
 
-    # Past the last tier there is no comparable band to average over, and
-    # dropping the tier filter would quote every sale of the item instead.
-    if tier is None:
+    # Past the last tier there is no band to default to, and quietly dropping
+    # the filter would quote every sale of the item instead. Choosing a tier
+    # explicitly is still honoured.
+    if reference is None or (tier is None and applied is None):
         return {**context, **_empty_stats()}
 
     filters = AuctionFilters(
         target_hex=reference["target_hex"],
-        tier=tier,
+        tier=applied,
         pieces=pieces,
         include_dyes=include_dyes,
     )

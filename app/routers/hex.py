@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,8 +31,11 @@ async def hex_auction_stats(
     redis: Annotated[Redis, Depends(get_redis)],
     include_dyes: bool = False,
     pieces: PiecesParam = None,
+    tier: Literal["t1", "t2", "t3", "all"] | None = Query(None),
 ):
-    return await get_hex_auction_stats(db, redis, hex_code, include_dyes, parse_pieces(pieces))
+    return await get_hex_auction_stats(
+        db, redis, hex_code, include_dyes, parse_pieces(pieces), tier
+    )
 
 
 @router.get("/{hex_code}/owners", response_model=HexOwnersResponse)

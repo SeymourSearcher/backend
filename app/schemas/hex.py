@@ -63,9 +63,12 @@ class HexOwnersResponse(BaseModel):
 class HexAuctionStatsResponse(AuctionStatsResponse):
     """Sale statistics for the colour a search resolves to.
 
-    target_hex is null only when nothing in the catalog matched at all; tier is
-    additionally null past the last tier, where no comparable band exists.
+    target_hex is null only when nothing in the catalog matched at all.
+    search_tier is the band the searched colour earns -- null past the last
+    tier -- and is what the default view prices. tier is the band actually
+    priced, which is null when every tier was asked for.
     """
     target_name: str | None
     target_hex: str | None
+    search_tier: str | None
     tier: str | None
