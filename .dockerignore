@@ -11,3 +11,6 @@
 venv/
 **/.pytest_cache/
 .ruff_cache/
+# Cargo's build tree is GB-scale and host-specific; the wheel is built in its
+# own stage (see Dockerfile).
+**/target/

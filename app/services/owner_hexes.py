@@ -86,6 +86,24 @@ def _decode(payload: dict) -> OwnerHexes:
 _rebuild = asyncio.Lock()
 
 
+async def _query_and_store(db: AsyncSession, redis: Redis) -> OwnerHexes:
+    owners = _build(await SeymourRepository(db).list_owner_hexes())
+    await OWNER_HEXES.set(redis, _encode(owners))
+    return owners
+
+
+async def refresh_owner_hexes(db: AsyncSession, redis: Redis) -> None:
+    """Rebuild the blob now, so no reader has to.
+
+    Every write to the seymours table calls this. The writer pays the ~600ms
+    query that the next hex visitor would otherwise have paid, and an upload is
+    not latency-sensitive the way a page view is. This is what lets OWNER_HEXES
+    carry a backstop TTL instead of a 30-minute one -- see app/services/cache.py.
+    """
+    async with _rebuild:
+        await _query_and_store(db, redis)
+
+
 async def get_owner_hexes(db: AsyncSession, redis: Redis) -> OwnerHexes:
     """One rebuild at a time, because a hex page view is four requests at once.
 
@@ -106,6 +124,4 @@ async def get_owner_hexes(db: AsyncSession, redis: Redis) -> OwnerHexes:
         if cached is not None:
             return _decode(cached)
 
-        owners = _build(await SeymourRepository(db).list_owner_hexes())
-        await OWNER_HEXES.set(redis, _encode(owners))
-        return owners
+        return await _query_and_store(db, redis)

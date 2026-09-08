@@ -19,6 +19,7 @@ from app.services.cache import (
     invalidate_hex_pages,
     invalidate_user_seymours,
 )
+from app.services.owner_hexes import refresh_owner_hexes
 from app.services.rankings import refresh_user_stats
 from app.services.compute import FADE_DYES, find_custom_sets
 from app.services import custom_sets
@@ -32,6 +33,19 @@ from app.services.seymour_filters import (
 )
 
 MAX_UPLOAD_ROWS = 100_000
+
+
+async def _after_collection_change(db: AsyncSession, redis: Redis, user_id: int) -> None:
+    """Everything derived from one user's seymours, after they change.
+
+    The hex-page blob is rebuilt rather than just dropped: it is the same query
+    for every hex code, so leaving it empty hands ~600ms to the next visitor.
+    See app/services/owner_hexes.py.
+    """
+    await refresh_user_stats(db, user_id)
+    await invalidate_user_seymours(redis, user_id)
+    await invalidate_hex_pages(redis)
+    await refresh_owner_hexes(db, redis)
 
 # Comfortably above MAX_UPLOAD_ROWS in the heaviest (JSON) format, so the row
 # limit is what users actually hit. Enforced while reading because the row
@@ -216,9 +230,7 @@ async def replace_all(
     user.last_uploaded = utcnow()
     await db.commit()
 
-    await refresh_user_stats(db, user.id)
-    await invalidate_user_seymours(redis, user.id)
-    await invalidate_hex_pages(redis)
+    await _after_collection_change(db, redis, user.id)
 
     return len(parsed), skipped
 
@@ -239,9 +251,7 @@ async def delete_one(db: AsyncSession, redis: Redis, user: User, seymour_id: int
     await seymours.remove(seymour)
     await db.commit()
 
-    await refresh_user_stats(db, user.id)
-    await invalidate_user_seymours(redis, user.id)
-    await invalidate_hex_pages(redis)
+    await _after_collection_change(db, redis, user.id)
 
 
 async def delete_all(db: AsyncSession, redis: Redis, user: User) -> dict:
@@ -261,8 +271,6 @@ async def delete_all(db: AsyncSession, redis: Redis, user: User) -> dict:
     user.last_uploaded = None
     await db.commit()
 
-    await refresh_user_stats(db, user.id)
-    await invalidate_user_seymours(redis, user.id)
-    await invalidate_hex_pages(redis)
+    await _after_collection_change(db, redis, user.id)
 
     return {"removed": removed, "sell_orders_cancelled": cancelled}

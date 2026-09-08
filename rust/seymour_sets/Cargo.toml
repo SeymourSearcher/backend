@@ -1,0 +1,18 @@
+[package]
+name = "seymour_sets"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "seymour_sets"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = "0.23"
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

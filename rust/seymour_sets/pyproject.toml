@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "seymour-sets"
+version = "0.1.0"
+description = "Custom-set search kernel for app.services.compute.find_custom_sets"
+requires-python = ">=3.11"
+classifiers = ["Programming Language :: Rust"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "seymour_sets"

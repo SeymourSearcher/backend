@@ -1,10 +1,25 @@
 import numpy as np
 import json
+import logging
 import os
 from collections import Counter
 from heapq import heapify, heappop, heappush
 from itertools import chain
 from scipy.spatial import cKDTree
+
+try:
+    import seymour_sets
+except ImportError:
+    # Optional: rust/seymour_sets is a compiled wheel, and a tree without it
+    # still runs the numpy search that remains the reference implementation.
+    # Warned about rather than tolerated quietly -- the two paths differ by ~10x
+    # at a full inventory, so a deploy that lost the wheel looks like a slow
+    # database rather than a missing build stage.
+    seymour_sets = None
+    logging.getLogger(__name__).warning(
+        "seymour_sets is not installed; find_custom_sets will use the slow "
+        "numpy path (see rust/seymour_sets/README.md)"
+    )
 
 from app.pieces import PIECE_COUNT, Piece, SLOT_TO_PIECE
 
@@ -628,20 +643,15 @@ def _greedy_select(scores, indices, counts, threshold):
 _TRIPLE_CHUNK = 25_000
 
 
-def find_custom_sets(seymour_list, max_avg_delta_e=1.0):
-    pieces, piece_labs = _get_piece_labs(seymour_list)
-    if pieces is None:
-        return []
-    
-    order = np.argsort([len(p) for p in pieces])
-    pieces = [pieces[i] for i in order]
-    piece_labs = [piece_labs[i] for i in order]
-    inv_order = np.argsort(order)
-    
+def _search_numpy(piece_labs, radius, max_avg_delta_e):
+    """Selected quadruples as (score, (i0, i1, i2, i3)), best-first.
+
+    The reference implementation: _search_rust has to reproduce this exactly,
+    which tests/unit/test_custom_sets_rust.py checks by running both.
+    """
     labs0, labs1, labs2, labs3 = piece_labs
     trees = [cKDTree(labs) for labs in piece_labs]
-    radius = max_avg_delta_e * 2.0
-    
+
     # Expanded a level at a time as flat index columns rather than by nested
     # loop: the loop made ~64k tiny tree queries and ~64k tiny score calls on a
     # 10k inventory, where a handful of batched ones do the same work.
@@ -687,11 +697,36 @@ def find_custom_sets(seymour_list, max_avg_delta_e=1.0):
     selected = _greedy_select(
         scores, candidate_indices, np.concatenate(count_blocks), max_avg_delta_e
     )
+    return [
+        (scores[position], tuple(candidate_indices[position].tolist()))
+        for position in selected
+    ]
+
+
+def _search_rust(piece_labs, radius, max_avg_delta_e):
+    return [
+        (score, (i0, i1, i2, i3))
+        for score, i0, i1, i2, i3 in seymour_sets.select_quads(
+            *piece_labs, radius, max_avg_delta_e
+        )
+    ]
+
+
+def find_custom_sets(seymour_list, max_avg_delta_e=1.0):
+    pieces, piece_labs = _get_piece_labs(seymour_list)
+    if pieces is None:
+        return []
+
+    order = np.argsort([len(p) for p in pieces])
+    pieces = [pieces[i] for i in order]
+    piece_labs = [piece_labs[i] for i in order]
+    inv_order = np.argsort(order)
+
+    search = _search_numpy if seymour_sets is None else _search_rust
+    selected = search(piece_labs, max_avg_delta_e * 2.0, max_avg_delta_e)
 
     results = []
-    for position in selected:
-        avg_de = scores[position]
-        indices = candidate_indices[position].tolist()
+    for avg_de, indices in selected:
         hexes = [pieces[j][indices[j]] for j in range(PIECE_COUNT)]
         labs = np.array([piece_labs[j][indices[j]] for j in range(PIECE_COUNT)])
         centroid = labs.mean(axis=0)

@@ -8,7 +8,14 @@ import fakeredis.aioredis
 import pytest
 
 from app.services import owner_hexes
-from app.services.owner_hexes import OwnerHexes, _build, _decode, _encode, get_owner_hexes
+from app.services.owner_hexes import (
+    OwnerHexes,
+    _build,
+    _decode,
+    _encode,
+    get_owner_hexes,
+    refresh_owner_hexes,
+)
 
 ROWS = [
     (7, "exact", 11, None, "FFFF00", 0),
@@ -63,6 +70,25 @@ def test_lowercase_hex_survives_as_the_same_colour():
     assert f"{owners.hexes[0]:06X}" == "FFFF00"
 
 
+@pytest.fixture
+def counting_repo(monkeypatch):
+    calls = []
+
+    class Repo:
+        def __init__(self, session):
+            pass
+
+        async def list_owner_hexes(self):
+            calls.append(1)
+            # Long enough that the other callers are definitely queued behind
+            # this one rather than finishing first by luck.
+            await asyncio.sleep(0.05)
+            return ROWS
+
+    monkeypatch.setattr(owner_hexes, "SeymourRepository", Repo)
+    return calls
+
+
 class TestSingleFlight:
     """A hex page view is four requests firing together, and all four land here.
 
@@ -70,24 +96,6 @@ class TestSingleFlight:
     query: measured at 556ms each over 106k rows, 2.4s for the page against
     0.6s sequential. See tests/bench/bench_endpoints.py.
     """
-
-    @pytest.fixture
-    def counting_repo(self, monkeypatch):
-        calls = []
-
-        class Repo:
-            def __init__(self, session):
-                pass
-
-            async def list_owner_hexes(self):
-                calls.append(1)
-                # Long enough that the other callers are definitely queued
-                # behind this one rather than finishing first by luck.
-                await asyncio.sleep(0.05)
-                return ROWS
-
-        monkeypatch.setattr(owner_hexes, "SeymourRepository", Repo)
-        return calls
 
     async def test_concurrent_callers_share_one_rebuild(self, counting_repo):
         redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
@@ -106,4 +114,29 @@ class TestSingleFlight:
         await get_owner_hexes(None, redis)
 
         assert len(counting_repo) == 1
+        await redis.aclose()
+
+
+class TestRefreshOnWrite:
+    """Writers rebuild the blob so readers never meet an empty key."""
+
+    async def test_a_refresh_leaves_the_cache_warm(self, counting_repo):
+        redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+        await refresh_owner_hexes(None, redis)
+        owners = await get_owner_hexes(None, redis)
+
+        assert len(counting_repo) == 1
+        assert list(owners.hexes) == [0xFFFF00, 0x000000, 0xFFFE00]
+        await redis.aclose()
+
+    async def test_a_refresh_requeries_over_a_live_key(self, counting_repo):
+        """Unlike a read, it must not trust what is already there -- the rows it
+        is called for are exactly the ones that just changed."""
+        redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+        await get_owner_hexes(None, redis)
+        await refresh_owner_hexes(None, redis)
+
+        assert len(counting_repo) == 2
         await redis.aclose()

@@ -12,6 +12,11 @@ build/
 .pytest_cache/
 .mypy_cache/
 
+# rust extension
+rust/**/target/
+*.pyd
+*.so
+
 # color maps
 color_map.png
 color_cube.png

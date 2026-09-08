@@ -58,7 +58,12 @@ HEX_INFO = CacheEntry("hex_info:v4:", 1800)
 
 # One entry, not one per hex: the payload behind every hex page is the same walk
 # of the whole seymours table. See app/services/owner_hexes.py.
-OWNER_HEXES = CacheEntry("owner_hexes:v2", 1800)
+#
+# The TTL is a backstop, not the staleness bound: every write to the seymours
+# table rebuilds this key (refresh_owner_hexes), and those are the only writes.
+# At 1800 it expired on its own between uploads and handed the ~600ms query to
+# whichever visitor arrived first -- twice an hour on a quiet day.
+OWNER_HEXES = CacheEntry("owner_hexes:v2", 6 * 3600)
 
 # The full ΔE-sorted owner list for one hex; the endpoint pages over it in
 # Python, so a page flip must not redo the scan.

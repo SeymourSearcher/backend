@@ -1,3 +1,24 @@
+# Its own stage so that app-code changes do not recompile Rust, and so neither
+# the toolchain nor Cargo's target/ tree reaches the runtime image. Only the
+# wheel is carried forward.
+FROM python:3.12-slim AS rust-build
+
+WORKDIR /src
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN pip install --no-cache-dir maturin
+
+COPY rust/seymour_sets/ ./rust/seymour_sets/
+# --compatibility linux skips the manylinux audit: this wheel is installed into
+# the same debian image it was built in and is never published.
+RUN maturin build --release --compatibility linux \
+    -m rust/seymour_sets/Cargo.toml --out /wheels
+
+
 FROM python:3.12-slim AS base
 
 WORKDIR /app
@@ -8,6 +29,11 @@ ENV PYTHONUNBUFFERED=1
 # Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# find_custom_sets falls back to a ~10x slower numpy path when this is absent,
+# and the fallback is silent by design. See rust/seymour_sets/README.md.
+COPY --from=rust-build /wheels /wheels
+RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 
 # Copy application code
 COPY . .
