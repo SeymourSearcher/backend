@@ -2,7 +2,13 @@ import numpy as np
 import pytest
 
 from app.errors import InvalidInputError
-from app.services.hex_pattern import PATTERN_LENGTH, matches, parse_pattern
+from app.services.hex_pattern import (
+    PATTERN_LENGTH,
+    like_mask,
+    matches,
+    parse_pattern,
+    variable_slots,
+)
 
 # Small enough to walk exhaustively, so "which colours match" can be answered by
 # brute force rather than trusted.
@@ -109,3 +115,48 @@ def test_an_unconstrained_pattern_matches_everything(raw):
 
 def test_an_empty_candidate_set_is_handled():
     assert matching("21????", np.empty(0, dtype=np.uint32)).tolist() == []
+
+
+def kept_by_sql(colour: int, raw: str) -> bool:
+    """MySQL's side of the translation, evaluated one colour at a time."""
+    pattern = parse_pattern(raw)
+    digits = f"{colour:06X}"
+
+    if any(m != "_" and m != d for m, d in zip(like_mask(pattern), digits)):
+        return False
+    # SUBSTRING is 1-based, which is what variable_slots reports.
+    return all(len({digits[s - 1] for s in slots}) == 1 for slots in variable_slots(pattern))
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("ABCDEF", "ABCDEF"),
+    ("21????", "21____"),
+    ("#2a?zz1", "2A___1"),
+    ("XXYYZZ", "______"),
+])
+def test_the_like_mask_keeps_only_the_literals(raw, expected):
+    assert like_mask(parse_pattern(raw)) == expected
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("ABCDEF", ()),
+    ("?????X", ()),          # used once, so it constrains nothing
+    ("X2XYZZ", ((1, 3), (5, 6))),
+    ("XYXYXY", ((1, 3, 5), (2, 4, 6))),
+])
+def test_variable_slots_are_one_based_from_the_left(raw, expected):
+    assert variable_slots(parse_pattern(raw)) == expected
+
+
+@pytest.mark.parametrize(
+    "raw", ["21????", "X2XYZZ", "XXYYZZ", "A?B?C?", "1X2Y3Z", "ABCDE?", "??00??", "X?X?X?",
+            "??????", "?????X"]
+)
+def test_the_sql_translation_agrees_with_the_mask_on_every_colour(raw):
+    """The auction stats filter by LIKE-plus-SUBSTRING while the search filters by
+    the bitmask, so the two must select the same colours or the figures would
+    describe a different set than the grid above them."""
+    sample = np.arange(0x000000, 0x010000, dtype=np.uint32)
+    expected = [c for c in sample.tolist() if kept_by_sql(c, raw)]
+
+    assert matching(raw, sample).tolist() == expected

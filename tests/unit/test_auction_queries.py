@@ -88,6 +88,45 @@ def test_build_where_nobin():
     assert "is_bin IS false" in sql(build_where(EndedAuction, AuctionFilters(bin_filter="nobin")))
 
 
+def test_build_where_pattern_emits_a_like_mask_and_one_equality_per_variable():
+    where = sql(build_where(EndedAuction, AuctionFilters(hex_pattern="2A?ZZ1")))
+
+    assert "hex_color LIKE '2A___1'" in where
+    # Slots 4 and 5 hold the same variable, so they must hold the same digit.
+    assert where.count("substring(ended_auctions.hex_color") == 2
+    assert ", 4, 1)" in where and ", 5, 1)" in where
+
+
+def test_build_where_pattern_normalises_like_the_search_does():
+    plain = sql(build_where(EndedAuction, AuctionFilters(hex_pattern="2A?ZZ1")))
+    assert sql(build_where(EndedAuction, AuctionFilters(hex_pattern="#2a?zz1"))) == plain
+
+
+def test_build_where_pattern_without_variables_is_a_like_alone():
+    where = sql(build_where(EndedAuction, AuctionFilters(hex_pattern="21????")))
+
+    assert "hex_color LIKE '21____'" in where
+    assert "substring" not in where
+
+
+def test_build_where_pattern_combines_with_the_other_filters():
+    """The stats panel sends the search's own filters, so these stack."""
+    where = sql(build_where(EndedAuction, AuctionFilters(
+        hex_pattern="21????", tier="t2", pieces=[0, 2], include_dyes=False,
+    )))
+
+    assert "hex_color LIKE '21____'" in where
+    assert "tier_keys = 't2'" in where
+    assert "piece IN (0, 2)" in where
+
+
+def test_filters_key_separates_patterns():
+    """Two patterns must not share a stats cache entry."""
+    assert filters_key(EndedAuction, AuctionFilters(hex_pattern="21????")) != filters_key(
+        EndedAuction, AuctionFilters(hex_pattern="22????")
+    )
+
+
 def test_sort_column_falls_back_per_model():
     assert sort_column(EndedAuction, "price") is EndedAuction.price
     assert sort_column(EndedAuction, "anything else") is EndedAuction.timestamp

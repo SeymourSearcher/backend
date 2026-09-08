@@ -1,12 +1,13 @@
-"""GET /hex-search.
+"""GET /hex-search and its two auction routes.
 
-Results are colours somebody in the database holds, so every case here seeds
-holdings first. FFFF00 is an exact Pure Yellow catalog colour, which makes the
-top row and its tier deterministic.
+Search results are colours somebody in the database holds, so every case there
+seeds holdings first. FFFF00 is an exact Pure Yellow catalog colour, which makes
+the top row and its tier deterministic. The auction routes seed ended sales
+instead -- they filter on the auction's colour, and nobody has to own one.
 """
 import pytest
 
-from app.models import Seymour, User
+from app.models import EndedAuction, Seymour, User
 from app.pieces import Piece
 
 pytestmark = pytest.mark.integration
@@ -209,3 +210,124 @@ async def test_out_of_range_parameters_are_refused(client, query):
 
 async def test_the_pattern_is_required(client):
     assert (await client.get("/hex-search")).status_code == 422
+
+
+SALE_BASE_MS = 1_700_000_000_000
+
+# hex_color, price, piece, tier, hours old. FFFE00 fails slot 3 and FF0F00
+# fails slot 4, so neither is in PATTERN -- they are here to be excluded.
+SALES = [
+    ("s1", "FFFF00", 1_000, Piece.HELMET, "t1", 3),
+    ("s2", "FFFF05", 3_000, Piece.HELMET, "t2", 2),
+    ("s3", "FFFF0F", 5_000, Piece.BOOTS, "t1", 1),
+    ("s4", "FFFE00", 9_000, Piece.HELMET, "t1", 4),
+    ("s5", "FF0F00", 7_000, Piece.HELMET, "t1", 5),
+]
+
+
+@pytest.fixture
+async def sales(db):
+    """Ended auctions, three of them matching PATTERN. Holdings are irrelevant
+    here: the stats filter on the auction's own colour, not on who owns one."""
+    db.add_all([
+        EndedAuction(
+            auction_id=aid,
+            seller_uuid="s", buyer_uuid="b",
+            price=price, is_bin=False, item_uuid=aid,
+            hex_color=hex_color, piece=piece,
+            timestamp=SALE_BASE_MS + age * 3_600_000,
+            target_hex_keys=hex_color, delta_e_keys=0.0, tier_keys=tier,
+            target_hex_all=hex_color, delta_e_all=0.0, tier_all=tier,
+        )
+        for aid, hex_color, price, piece, tier, age in SALES
+    ])
+    await db.commit()
+    return SALES
+
+
+class TestPatternAuctionStats:
+    async def test_only_colours_the_pattern_matches_are_counted(self, client, sales):
+        body = (await client.get(f"/hex-search/auction-stats?p={PATTERN}")).json()
+
+        assert body["pattern"] == PATTERN
+        assert body["pattern_total"] == 16
+        # 1_000 + 3_000 + 5_000, with FFFE00 and FF0F00 left out.
+        assert (body["total"], body["total_volume"]) == (3, 9_000)
+        assert body["median_price"] == 3_000
+
+    async def test_a_repeated_variable_is_enforced_in_sql(self, client, sales):
+        """The only case the LIKE mask cannot express on its own: FFFF0F has the
+        same digit in both variable slots, FFFF00 and FFFF05 do not."""
+        body = (await client.get("/hex-search/auction-stats?p=FFFFZZ")).json()
+
+        assert (body["total"], body["total_volume"]) == (1, 5_000)
+
+    async def test_a_pattern_nothing_has_sold_in_is_empty_rather_than_an_error(
+        self, client, sales
+    ):
+        body = (await client.get("/hex-search/auction-stats?p=21????")).json()
+
+        assert body["total"] == 0
+        assert body["price_distribution"] == [] and body["median_price"] == 0.0
+
+    async def test_the_tier_filter_narrows_it(self, client, sales):
+        body = (await client.get(f"/hex-search/auction-stats?p={PATTERN}&tier=t2")).json()
+
+        assert body["tier"] == "t2"
+        assert (body["total"], body["total_volume"]) == (1, 3_000)
+
+    async def test_all_is_the_every_band_sentinel_rather_than_a_band(self, client, sales):
+        body = (await client.get(f"/hex-search/auction-stats?p={PATTERN}&tier=all")).json()
+
+        assert body["tier"] is None and body["total"] == 3
+
+    async def test_the_piece_filter_narrows_it(self, client, sales):
+        body = (await client.get(f"/hex-search/auction-stats?p={PATTERN}&pieces=3")).json()
+
+        assert (body["total"], body["total_volume"]) == (1, 5_000)
+
+    async def test_a_leading_hash_and_lower_case_reach_the_same_rows(self, client, sales):
+        body = (await client.get("/hex-search/auction-stats", params={"p": "#ffff0?"})).json()
+
+        assert body["pattern"] == PATTERN and body["total"] == 3
+
+
+class TestPatternSales:
+    async def test_it_lists_the_matching_sales_newest_first(self, client, sales):
+        body = (await client.get(f"/hex-search/sales?p={PATTERN}")).json()
+
+        assert body["total"] == 3
+        assert [row["auction_id"] for row in body["items"]] == ["s3", "s2", "s1"]
+
+    async def test_rows_carry_their_own_catalog_match(self, client, sales):
+        """Not a distance to the searched colour -- a pattern names a set, so
+        there is no single colour to measure from."""
+        row = (await client.get(f"/hex-search/sales?p={PATTERN}")).json()["items"][0]
+
+        assert row["hex_color"] == "FFFF0F"
+        assert (row["delta_e"], row["tier"]) == (0.0, "t1")
+        assert "search_delta_e" not in row
+
+    async def test_it_pages(self, client, sales):
+        first = (await client.get(f"/hex-search/sales?p={PATTERN}&limit=2&offset=0")).json()
+        second = (await client.get(f"/hex-search/sales?p={PATTERN}&limit=2&offset=2")).json()
+
+        assert [r["auction_id"] for r in first["items"]] == ["s3", "s2"]
+        assert [r["auction_id"] for r in second["items"]] == ["s1"]
+        assert first["total"] == second["total"] == 3
+
+    async def test_it_agrees_with_the_stats_it_is_listed_under(self, client, sales):
+        """Same filters, so the two must describe the same rows."""
+        stats = (await client.get(f"/hex-search/auction-stats?p={PATTERN}&tier=t1")).json()
+        listed = (await client.get(f"/hex-search/sales?p={PATTERN}&tier=t1")).json()
+
+        assert stats["total"] == listed["total"]
+        assert sum(r["price"] for r in listed["items"]) == stats["total_volume"]
+
+
+@pytest.mark.parametrize("path", ["auction-stats", "sales"])
+@pytest.mark.parametrize("raw", ["ZZZZZ", "1234567", "12345!", ""])
+async def test_the_auction_routes_refuse_malformed_patterns(client, path, raw):
+    response = await client.get(f"/hex-search/{path}", params={"p": raw})
+
+    assert response.status_code in (400, 422)

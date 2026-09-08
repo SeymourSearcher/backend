@@ -47,6 +47,11 @@ class HexPattern:
         return 16 ** self.free
 
 
+def _shift(slot: int) -> int:
+    """Nibble shift of a 0-based slot, counting from the left."""
+    return 4 * (PATTERN_LENGTH - 1 - slot)
+
+
 def parse_pattern(raw: str) -> HexPattern:
     normalised = raw.strip().lstrip("#").upper()
     if len(normalised) != PATTERN_LENGTH:
@@ -58,7 +63,7 @@ def parse_pattern(raw: str) -> HexPattern:
     free = 0
 
     for slot, char in enumerate(normalised):
-        shift = 4 * (PATTERN_LENGTH - 1 - slot)
+        shift = _shift(slot)
         if char in _LITERALS:
             base += _LITERALS.index(char) << shift
             literal_mask |= 0xF << shift
@@ -90,3 +95,26 @@ def matches(pattern: HexPattern, colours: np.ndarray) -> np.ndarray:
             ok &= first == ((colours >> np.uint32(shift)) & np.uint32(0xF))
 
     return ok
+
+
+def like_mask(pattern: HexPattern) -> str:
+    """The literal slots kept, everything else `_`, as a SQL LIKE mask.
+
+    Safe to interpolate: parse_pattern admits no character LIKE treats
+    specially. It expresses only the literals -- variables need `variable_slots`
+    on top of it.
+    """
+    return "".join(
+        _LITERALS[(pattern.base >> _shift(slot)) & 0xF]
+        if (pattern.literal_mask >> _shift(slot)) & 0xF
+        else "_"
+        for slot in range(PATTERN_LENGTH)
+    )
+
+
+def variable_slots(pattern: HexPattern) -> tuple[tuple[int, ...], ...]:
+    """Each repeated variable's slots, 1-based from the left for SQL SUBSTRING."""
+    return tuple(
+        tuple(PATTERN_LENGTH - shift // 4 for shift in shifts)
+        for shifts in pattern.var_groups
+    )

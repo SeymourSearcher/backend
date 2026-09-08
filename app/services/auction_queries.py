@@ -17,6 +17,7 @@ from app.errors import NotFoundError
 from app.models import ActiveAuction
 from app.repositories.auction_repo import AuctionRepository
 from app.services.cache import AUCTION_COUNT
+from app.services.hex_pattern import like_mask, parse_pattern, variable_slots
 from app.services.matching import (
     compute_abs_diff,
     get_name_for_hex,
@@ -40,6 +41,8 @@ class AuctionFilters:
     # The catalog colour an auction was matched to, rather than the colour it
     # actually is: hex_color is exact, so it finds nothing for most colours.
     target_hex: str | None = None
+    # A six-slot pattern over hex_color itself; see app/services/hex_pattern.py.
+    hex_pattern: str | None = None
 
 
 def match_columns_for(model, include_dyes: bool):
@@ -49,12 +52,32 @@ def match_columns_for(model, include_dyes: bool):
     return model.target_hex_keys, model.delta_e_keys, model.tier_keys
 
 
+def pattern_conditions(col, raw_pattern: str) -> list:
+    """A hex pattern as SQL: a LIKE mask for the literals, then one equality per
+    repeated variable.
+
+    Only a pattern whose first slot is a literal can range-scan the hex_color
+    index; anything else scans the table, which is why every caller of this goes
+    through the auction caches.
+    """
+    pattern = parse_pattern(raw_pattern)
+    conditions = [col.like(like_mask(pattern))]
+
+    for slots in variable_slots(pattern):
+        first = func.substring(col, slots[0], 1)
+        conditions.extend(func.substring(col, slot, 1) == first for slot in slots[1:])
+
+    return conditions
+
+
 def build_where(model, filters: AuctionFilters):
     target_col, _, tier_col = match_columns_for(model, filters.include_dyes)
     conditions = []
 
     if filters.hex_color:
         conditions.append(model.hex_color == filters.hex_color.upper().lstrip("#"))
+    if filters.hex_pattern:
+        conditions.extend(pattern_conditions(model.hex_color, filters.hex_pattern))
     if filters.pieces:
         conditions.append(model.piece.in_(filters.pieces))
     if filters.min_price is not None:

@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 
 from app.pieces import Piece
+from app.schemas.auction import AuctionStatsResponse, EndedAuctionResponse
 from app.schemas.common import PublicUser
 
 
@@ -48,3 +49,30 @@ class HexSearchResponse(BaseModel):
     limit: int
     offset: int
     items: list[HexSearchResult]
+
+
+class PatternReference(BaseModel):
+    """Which pattern and band the auction figures below were taken under.
+
+    pattern is normalised -- upper-cased and '#'-stripped -- so it may differ
+    from what was asked for. tier is null when every band was asked for.
+    """
+    pattern: str
+    pattern_total: int
+    tier: str | None
+
+
+class PatternAuctionStatsResponse(PatternReference, AuctionStatsResponse):
+    """Sales of the colours the pattern matches, not of the catalog colours they
+    are near; see app/services/pattern_auctions.py."""
+
+
+class PatternSalesResponse(PatternReference):
+    """The sales PatternAuctionStatsResponse aggregates, newest first.
+
+    A row's delta_e and tier are its own colour's distance to its own catalog
+    target, which is what the result cards show too -- there is no searched
+    colour here to measure against.
+    """
+    total: int
+    items: list[EndedAuctionResponse]
