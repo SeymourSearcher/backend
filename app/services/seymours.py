@@ -91,7 +91,10 @@ async def available_filters(
         return cached
 
     seymours = await get_user_seymours(db, redis, user.id)
-    filters = compute_available_filters(
+    # Offloaded for the same reason as the custom-set branch below: cKDTree over a
+    # whole inventory on the loop blocks every request on the worker.
+    filters = await asyncio.to_thread(
+        compute_available_filters,
         [(s.hex_color, s.item_name) for s in seymours], filter_type, incomplete_only, include_dyes
     )
     await SEYMOUR_FILTERS.set(
@@ -120,7 +123,8 @@ async def owned_sub_filters(
         return cached
 
     seymours = await get_user_seymours(db, redis, user.id)
-    options = compute_owned_sub_filters(
+    options = await asyncio.to_thread(
+        compute_owned_sub_filters,
         [(s.hex_color, s.item_name) for s in seymours], filter_type, incomplete_only, include_dyes
     )
     await SEYMOUR_FILTERS.set(
@@ -180,7 +184,8 @@ async def list_for_user(
             )
             await CUSTOM_SETS.set(redis, custom_sets_data, custom_sets_hash(seymour_list))
 
-    filtered = filter_with_matches(
+    filtered = await asyncio.to_thread(
+        filter_with_matches,
         seymours, filter_type, sub_filter, incomplete_only, include_dyes, custom_sets_data
     )
     await SEYMOUR_RESULTS.set(
@@ -194,7 +199,7 @@ async def list_for_user(
 async def replace_all(
     db: AsyncSession, redis: Redis, user: User, content: str
 ) -> tuple[int, int]:
-    parsed, skipped = parse_seymour_file(content)
+    parsed, skipped = await asyncio.to_thread(parse_seymour_file, content)
 
     if len(parsed) > MAX_UPLOAD_ROWS:
         raise InvalidInputError("Too many seymours to upload")
