@@ -22,14 +22,18 @@ class CacheEntry:
     async def exists(self, redis: Redis, *parts: Any) -> bool:
         return bool(await redis.exists(self.key(*parts)))
 
-    async def get(self, redis: Redis, *parts: Any) -> Any | None:
+    async def get_raw(self, redis: Redis, *parts: Any) -> str | None:
         key = self.key(*parts)
         cached = await redis.get(key)
         if not cached:
             return None
         if self.refresh_on_read:
             await redis.expire(key, self.ttl)
-        return json.loads(cached)
+        return cached
+
+    async def get(self, redis: Redis, *parts: Any) -> Any | None:
+        cached = await self.get_raw(redis, *parts)
+        return None if cached is None else json.loads(cached)
 
     async def set(self, redis: Redis, value: Any, *parts: Any) -> None:
         await redis.setex(self.key(*parts), self.ttl, json.dumps(value))

@@ -140,3 +140,36 @@ class TestRefreshOnWrite:
 
         assert len(counting_repo) == 2
         await redis.aclose()
+
+
+class TestDecodedSnapshot:
+    """Warm reads reuse one decoded snapshot until the blob changes."""
+
+    async def test_an_unchanged_blob_is_decoded_once(self, counting_repo):
+        redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+        first = await get_owner_hexes(None, redis)
+        second = await get_owner_hexes(None, redis)
+        third = await get_owner_hexes(None, redis)
+
+        assert second is third
+        assert list(second.hexes) == list(first.hexes)
+        await redis.aclose()
+
+    async def test_a_new_blob_is_not_served_from_the_old_decode(self, counting_repo, monkeypatch):
+        redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+        before = await get_owner_hexes(None, redis)
+        await get_owner_hexes(None, redis)
+
+        monkeypatch.setattr(owner_hexes.SeymourRepository, "list_owner_hexes", _one_row)
+        await refresh_owner_hexes(None, redis)
+        after = await get_owner_hexes(None, redis)
+
+        assert len(before.hexes) == 3
+        assert list(after.hexes) == [0x123456]
+        assert after.labs.tolist() == owner_hexes.ALL_LAB[[0x123456]].tolist()
+        await redis.aclose()
+
+
+async def _one_row(self):
+    return [(1, "solo", 10, None, "123456", 2)]

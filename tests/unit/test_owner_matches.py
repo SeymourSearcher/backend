@@ -9,6 +9,7 @@ import numpy as np
 from app.services.compute import ALL_LAB, get_lab
 from app.services.owner_hexes import _build
 from app.services.owner_matches import (
+    _delta_es,
     find_owner_matches,
     owned_colours,
     owners_by_hex,
@@ -238,6 +239,17 @@ class TestOwnedColours:
 
     def test_an_empty_table_yields_an_empty_array(self):
         assert owned_colours(owners()).tolist() == []
+
+
+def test_the_snapshot_labs_give_exactly_the_old_per_request_gather():
+    """OwnerHexes.labs must not change a single ΔE, tie or tier boundary."""
+    rng = np.random.default_rng(7)
+    colours = rng.integers(0, 0x1000000, 5_000)
+    table = owners(*[(i % 50, f"u{i % 50}", f"{c:06X}", i % 4) for i, c in enumerate(colours)])
+
+    for search in ["FFFF00", "123456", f"{colours[0]:06X}"]:
+        expected = np.linalg.norm(ALL_LAB[colours.astype(np.uint32)] - get_lab(search), axis=1)
+        assert np.array_equal(_delta_es(table, search), expected)
 
 
 def test_the_lab_table_covers_the_whole_colour_space():

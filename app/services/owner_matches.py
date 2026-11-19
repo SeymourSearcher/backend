@@ -6,12 +6,13 @@ Two questions, one primitive: the holdings near the *searched* colour
 
 This used to run off precomputed ΔE≤10 neighbourhood tables, one per catalog
 target, which made the searched colour unanswerable -- it has no precomputed
-neighbourhood. Measuring directly needs neither: ALL_LAB is already resident, so
-the whole owner table is one fancy-index and one norm.
+neighbourhood. Measuring directly needs neither: each owned colour's LAB is
+gathered once per snapshot (OwnerHexes.labs), so the whole owner table is one
+dense subtraction and one norm.
 """
 import numpy as np
 
-from app.services.compute import ALL_LAB, get_lab
+from app.services.compute import get_lab
 from app.services.matching import TIER_THRESHOLDS, get_tier
 from app.services.owner_hexes import OwnerHexes
 
@@ -22,8 +23,7 @@ TIER_MAX_DELTA_E = max(high for _, high in TIER_THRESHOLDS.values())
 
 
 def _delta_es(owners: OwnerHexes, hex_code: str) -> np.ndarray:
-    hexes = np.frombuffer(owners.hexes, dtype=np.uint32)
-    return np.linalg.norm(ALL_LAB[hexes] - get_lab(hex_code), axis=1)
+    return np.linalg.norm(owners.labs - get_lab(hex_code), axis=1)
 
 
 def _best_per_user(owners: OwnerHexes, hex_code: str, max_delta_e: float) -> dict[int, float]:

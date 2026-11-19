@@ -18,15 +18,18 @@ app/services/cache.py) -- _decode has no tolerance for a payload written by an
 older revision.
 """
 import asyncio
+import json
 from array import array
 from base64 import b64decode, b64encode
 from typing import NamedTuple
 
+import numpy as np
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.seymour_repo import SeymourRepository
 from app.services.cache import OWNER_HEXES
+from app.services.compute import ALL_LAB
 
 # Both columns are packed with the same typecode so there is no per-column width
 # to get wrong; 'I' also leaves no user-count cliff to trip over later.
@@ -37,12 +40,22 @@ PIECE_TYPECODE = "B"
 
 
 class OwnerHexes(NamedTuple):
-    """users[idx[i]] owns hexes[i] on piece pieces[i], for every Seymour."""
+    """users[idx[i]] owns hexes[i] on piece pieces[i], for every Seymour.
+
+    labs[i] is ALL_LAB[hexes[i]], gathered once per snapshot: every ΔE pass
+    over the owners reads it, and gathering 118k scattered rows out of the
+    192 MiB table per pass was 63% of the API's CPU. Not part of the blob.
+    """
 
     users: list[list]  # [user_id, username, discord_id, avatar_hash]
     idx: array
     hexes: array
     pieces: array
+    labs: np.ndarray
+
+
+def _labs(hexes: array) -> np.ndarray:
+    return ALL_LAB[np.frombuffer(hexes, dtype=np.uint32)]
 
 
 def _build(rows: list[tuple[int, str, int, str | None, str, int]]) -> OwnerHexes:
@@ -60,7 +73,7 @@ def _build(rows: list[tuple[int, str, int, str | None, str, int]]) -> OwnerHexes
         hexes.append(int(hex_color, 16))
         pieces.append(item_name)
 
-    return OwnerHexes(users, idx, hexes, pieces)
+    return OwnerHexes(users, idx, hexes, pieces, _labs(hexes))
 
 
 def _encode(owners: OwnerHexes) -> dict:
@@ -80,10 +93,26 @@ def _decode(payload: dict) -> OwnerHexes:
     idx.frombytes(b64decode(payload["idx"]))
     hexes.frombytes(b64decode(payload["hexes"]))
     pieces.frombytes(b64decode(payload["pieces"]))
-    return OwnerHexes(payload["users"], idx, hexes, pieces)
+    return OwnerHexes(payload["users"], idx, hexes, pieces, _labs(hexes))
 
 
 _rebuild = asyncio.Lock()
+
+# The last blob read and what it decoded to. Keyed by the blob itself, so any
+# rebuild or invalidation -- from this process or another -- is a miss here.
+_decoded: tuple[str, OwnerHexes] | None = None
+
+
+def _decode_cached(raw: str) -> OwnerHexes:
+    """_decode, skipped when the blob is the one decoded last time.
+
+    Saves the json/base64 decode and the LAB gather on every warm read; the
+    1.4 MB comparison costs well under a millisecond.
+    """
+    global _decoded
+    if _decoded is None or _decoded[0] != raw:
+        _decoded = (raw, _decode(json.loads(raw)))
+    return _decoded[1]
 
 
 async def _query_and_store(db: AsyncSession, redis: Redis) -> OwnerHexes:
@@ -113,15 +142,15 @@ async def get_owner_hexes(db: AsyncSession, redis: Redis) -> OwnerHexes:
     still rebuild N times; that is 4x better than N*4 and needs no cross-process
     coordination.
     """
-    cached = await OWNER_HEXES.get(redis)
+    cached = await OWNER_HEXES.get_raw(redis)
     if cached is not None:
-        return _decode(cached)
+        return _decode_cached(cached)
 
     async with _rebuild:
         # Re-read inside the lock: whoever queued here wants the winner's
         # result, not another identical query.
-        cached = await OWNER_HEXES.get(redis)
+        cached = await OWNER_HEXES.get_raw(redis)
         if cached is not None:
-            return _decode(cached)
+            return _decode_cached(cached)
 
         return await _query_and_store(db, redis)
