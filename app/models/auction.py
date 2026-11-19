@@ -47,7 +47,11 @@ class ActiveAuction(Base):
 class EndedAuction(Base):
     __tablename__ = "ended_auctions"
     __table_args__ = (
-        Index("ix_ended_auctions_piece", "piece"),
+        # Covers every per-piece stats pass; see alembic 8b4f2d6e1c3a.
+        Index(
+            "ix_ended_piece_price_cover",
+            "piece", "price", "is_bin", "tier_all", "tier_keys", "timestamp",
+        ),
         # Piece is the one filter common enough to need the sort column with it:
         # ~42k rows match a single piece, and without this the page filesorts
         # them all (274ms at offset 10k, 32ms with).
