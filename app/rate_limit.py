@@ -47,17 +47,25 @@ def client_ip(request: Request) -> str:
 
 
 async def _consume(redis: Redis, key: str, rl: RateLimit) -> tuple[bool, int]:
-    """Fixed window: the first request of a window is the one that sets the TTL."""
+    """Fixed window. The key is created with its TTL before it is counted, in one
+    transaction, so no failure can leave a counter that never expires."""
     full_key = f"{KEY_PREFIX}{key}"
-    current = await redis.incr(full_key)
-    if current == 1:
-        await redis.expire(full_key, rl.window)
-    ttl = await redis.ttl(full_key)
+    async with redis.pipeline(transaction=True) as pipe:
+        pipe.set(full_key, 0, ex=rl.window, nx=True)
+        pipe.incr(full_key)
+        pipe.ttl(full_key)
+        _, current, ttl = await pipe.execute()
     return current <= rl.limit, max(0, ttl)
 
 
 async def _enforce_for(rl: RateLimit, identity: str, redis: Redis) -> None:
-    allowed, retry_after = await _consume(redis, f"{rl.bucket}:{identity}", rl)
+    try:
+        allowed, retry_after = await _consume(redis, f"{rl.bucket}:{identity}", rl)
+    except RedisError:
+        # Fail open. Redis being unreachable is an outage of the limiter, not of
+        # the API, and every endpoint behind it already tolerates a cache miss.
+        logger.warning("rate limiter unavailable, allowing request", exc_info=True)
+        return
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -106,9 +114,4 @@ async def global_rate_limit(
 ) -> None:
     if request.url.path in UNLIMITED_PATHS:
         return
-    try:
-        await enforce(GLOBAL_LIMIT, request, redis)
-    except RedisError:
-        # Fail open. Redis being unreachable is an outage of the limiter, not of
-        # the API, and every endpoint behind it already tolerates a cache miss.
-        logger.warning("rate limiter unavailable, allowing request", exc_info=True)
+    await enforce(GLOBAL_LIMIT, request, redis)

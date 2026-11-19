@@ -26,14 +26,17 @@ TierParam = Annotated[Literal["t1", "t2", "t3", "all"] | None, Query()]
 # ~2.8e9 patterns too, but the cost is worse: a five-free-slot pattern gathers ΔE
 # for a million colours per request, and unlike the hex pages there is nothing
 # worth caching behind the search itself -- the key would vary in seven
-# dimensions at once. The budget is shared by all three routes below, and one
-# view of the page spends three of it, so it is not as sharp as it looks.
-HEX_SEARCH_LIMIT = RateLimit("hex_search", 90, 60)
+# dimensions at once. The two auction routes are cheaper SQL and get their own
+# bucket, since every view of the page calls both alongside the search.
+HEX_SEARCH_LIMIT = RateLimit("hex_search", 30, 60)
+PATTERN_AUCTIONS_LIMIT = RateLimit("hex_search:auctions", 60, 60)
 
-router = APIRouter(dependencies=[Depends(limiter(HEX_SEARCH_LIMIT))])
+router = APIRouter()
+_search_limited = [Depends(limiter(HEX_SEARCH_LIMIT))]
+_auctions_limited = [Depends(limiter(PATTERN_AUCTIONS_LIMIT))]
 
 
-@router.get("", response_model=HexSearchResponse)
+@router.get("", response_model=HexSearchResponse, dependencies=_search_limited)
 async def hex_search(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
@@ -59,7 +62,9 @@ async def hex_search(
 # The two routes below take the search's own filters rather than their own, so
 # the figures always describe the slice the result grid is showing. mine_only is
 # not among them: an ended auction belongs to whoever bought it.
-@router.get("/auction-stats", response_model=PatternAuctionStatsResponse)
+@router.get(
+    "/auction-stats", response_model=PatternAuctionStatsResponse, dependencies=_auctions_limited
+)
 async def pattern_auction_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
@@ -71,7 +76,7 @@ async def pattern_auction_stats(
     return await get_pattern_auction_stats(db, redis, p, include_dyes, tier, parse_pieces(pieces))
 
 
-@router.get("/sales", response_model=PatternSalesResponse)
+@router.get("/sales", response_model=PatternSalesResponse, dependencies=_auctions_limited)
 async def pattern_sales(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],

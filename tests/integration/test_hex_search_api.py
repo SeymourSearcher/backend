@@ -235,7 +235,7 @@ async def sales(db):
             seller_uuid="s", buyer_uuid="b",
             price=price, is_bin=False, item_uuid=aid,
             hex_color=hex_color, piece=piece,
-            timestamp=SALE_BASE_MS + age * 3_600_000,
+            timestamp=SALE_BASE_MS - age * 3_600_000,
             target_hex_keys=hex_color, delta_e_keys=0.0, tier_keys=tier,
             target_hex_all=hex_color, delta_e_all=0.0, tier_all=tier,
         )
@@ -256,11 +256,11 @@ class TestPatternAuctionStats:
         assert body["median_price"] == 3_000
 
     async def test_a_repeated_variable_is_enforced_in_sql(self, client, sales):
-        """The only case the LIKE mask cannot express on its own: FFFF0F has the
-        same digit in both variable slots, FFFF00 and FFFF05 do not."""
+        """The only case the LIKE mask cannot express on its own: FFFF00 has the
+        same digit in both variable slots, FFFF05 and FFFF0F do not."""
         body = (await client.get("/hex-search/auction-stats?p=FFFFZZ")).json()
 
-        assert (body["total"], body["total_volume"]) == (1, 5_000)
+        assert (body["total"], body["total_volume"]) == (1, 1_000)
 
     async def test_a_pattern_nothing_has_sold_in_is_empty_rather_than_an_error(
         self, client, sales

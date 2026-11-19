@@ -17,7 +17,7 @@ from app.pieces import Piece
 from app.rate_limit import GLOBAL_LIMIT, KEY_PREFIX, RateLimit
 from app.routers.auth import CALLBACK_LIMIT
 from app.routers.hex import HEX_LIMIT
-from app.routers.hex_search import HEX_SEARCH_LIMIT
+from app.routers.hex_search import HEX_SEARCH_LIMIT, PATTERN_AUCTIONS_LIMIT
 from app.services import auth, custom_sets
 
 pytestmark = pytest.mark.integration
@@ -90,6 +90,26 @@ async def test_pattern_search_does_not_spend_the_hex_page_budget(client, redis):
     await exhaust(redis, HEX_SEARCH_LIMIT)
 
     assert (await client.get("/hex/FF0000", headers=sent_from(CALLER))).status_code == 200
+
+
+async def test_every_counter_is_created_with_an_expiry(client, redis):
+    await client.get("/marketplace/sets-pieces", headers=sent_from(CALLER))
+
+    ttl = await redis.ttl(f"{KEY_PREFIX}{GLOBAL_LIMIT.bucket}:{CALLER}")
+
+    assert 0 < ttl <= GLOBAL_LIMIT.window
+
+
+async def test_the_pattern_auction_routes_have_their_own_bucket(client, redis):
+    """Every view of the search page calls them alongside the search itself."""
+    await exhaust(redis, HEX_SEARCH_LIMIT)
+
+    stats = await client.get("/hex-search/auction-stats?p=21????", headers=sent_from(CALLER))
+    assert stats.status_code == 200
+
+    await exhaust(redis, PATTERN_AUCTIONS_LIMIT)
+    refused = await client.get("/hex-search/sales?p=21????", headers=sent_from(CALLER))
+    assert refused.status_code == 429
 
 
 async def test_the_login_callback_is_throttled(client, redis, monkeypatch):
