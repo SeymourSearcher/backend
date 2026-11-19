@@ -1,5 +1,5 @@
 from typing import Annotated, Optional
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Response, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import JWTError, jwt
@@ -21,6 +21,22 @@ async def get_redis() -> Redis:
     if redis_client is None:
         redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
     return redis_client
+
+
+PUBLIC_MAX_AGE = 60
+CATALOG_MAX_AGE = 86400
+
+
+def public_cache(max_age: int = PUBLIC_MAX_AGE):
+    """Route dependency marking a success response cacheable by browsers and CDNs.
+
+    Only for responses identical for every caller: never on anything that
+    reads the user. Error responses don't carry it.
+    """
+    def set_header(response: Response) -> None:
+        response.headers["Cache-Control"] = f"public, max-age={max_age}"
+
+    return Depends(set_header)
 
 
 async def get_db():

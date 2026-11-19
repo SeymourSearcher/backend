@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from redis.asyncio import Redis
 
-from app.dependencies import get_db, get_current_user, get_redis
+from app.dependencies import get_db, get_current_user, get_redis, public_cache
 from app.schemas.stats import (
     CollectionValueResponse,
     FeaturedSetResponse,
@@ -21,7 +21,7 @@ from app.models import User
 router = APIRouter()
 
 
-@router.get("/", response_model=StatsResponse)
+@router.get("/", response_model=StatsResponse, dependencies=[public_cache()])
 async def get_global_stats(db: Annotated[AsyncSession, Depends(get_db)]):
     return await rankings_service.global_stats(db)
 
@@ -48,7 +48,7 @@ async def get_collection_value(
     )
 
 
-@router.get("/rankings", response_model=list[RankingResponse])
+@router.get("/rankings", response_model=list[RankingResponse], dependencies=[public_cache()])
 async def get_rankings(
     db: Annotated[AsyncSession, Depends(get_db)],
     sort_by: RankingSort = RankingSort.total_seymours,
@@ -56,6 +56,8 @@ async def get_rankings(
     return await rankings_service.rankings(db, sort_by.value)
 
 
-@router.get("/custom-sets", response_model=list[FeaturedSetResponse])
+@router.get(
+    "/custom-sets", response_model=list[FeaturedSetResponse], dependencies=[public_cache()]
+)
 async def get_featured_sets(db: Annotated[AsyncSession, Depends(get_db)]):
     return await custom_sets_service.featured_sets(db)

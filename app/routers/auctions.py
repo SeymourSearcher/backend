@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db, get_redis
+from app.dependencies import CATALOG_MAX_AGE, get_db, get_redis, public_cache
 from app.models import ActiveAuction, EndedAuction
 from app.schemas.auction import (
     ActiveAuctionResponse,
@@ -99,7 +99,9 @@ async def list_recent_bids(
     return await recent_bids(db, limit, include_dyes)
 
 
-@router.get("/top-sales", response_model=list[EndedAuctionResponse])
+@router.get(
+    "/top-sales", response_model=list[EndedAuctionResponse], dependencies=[public_cache()]
+)
 async def list_top_sales(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],
@@ -110,12 +112,12 @@ async def list_top_sales(
     return await get_top_sales(db, redis, hours, limit, include_dyes)
 
 
-@router.get("/sets", response_model=list[str])
+@router.get("/sets", response_model=list[str], dependencies=[public_cache(CATALOG_MAX_AGE)])
 async def list_available_sets():
     return list_set_names()
 
 
-@router.get("/stats", response_model=AuctionStatsResponse)
+@router.get("/stats", response_model=AuctionStatsResponse, dependencies=[public_cache()])
 async def get_auction_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[Redis, Depends(get_redis)],

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db, get_redis
+from app.dependencies import get_db, get_redis, public_cache
 from app.pieces import parse_pieces
 from app.rate_limit import RateLimit, limiter
 from app.schemas.hex import (
@@ -28,7 +28,7 @@ TierParam = Annotated[Literal["t1", "t2", "t3", "all"] | None, Query()]
 # owned rows). Four requests per page view, so this is ~15 hex pages a minute.
 HEX_LIMIT = RateLimit("hex", 60, 60)
 
-router = APIRouter(dependencies=[Depends(limiter(HEX_LIMIT))])
+router = APIRouter(dependencies=[Depends(limiter(HEX_LIMIT)), public_cache()])
 
 
 @router.get("/{hex_code}", response_model=HexInfoResponse)

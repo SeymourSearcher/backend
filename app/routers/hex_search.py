@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db, get_optional_user, get_redis
+from app.dependencies import get_db, get_optional_user, get_redis, public_cache
 from app.models import User
 from app.pieces import parse_pieces
 from app.rate_limit import RateLimit, limiter
@@ -33,7 +33,8 @@ PATTERN_AUCTIONS_LIMIT = RateLimit("hex_search:auctions", 60, 60)
 
 router = APIRouter()
 _search_limited = [Depends(limiter(HEX_SEARCH_LIMIT))]
-_auctions_limited = [Depends(limiter(PATTERN_AUCTIONS_LIMIT))]
+# Public: unlike the search itself, these never read the caller.
+_auctions_limited = [Depends(limiter(PATTERN_AUCTIONS_LIMIT)), public_cache()]
 
 
 @router.get("", response_model=HexSearchResponse, dependencies=_search_limited)
