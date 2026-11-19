@@ -236,6 +236,16 @@ async def _refresh_caches(db: AsyncSession, changes: SyncChanges) -> None:
         logger.exception("Auction cache refresh failed")
 
 
+async def _warm_stats(db: AsyncSession) -> None:
+    """Best effort, like _refresh_caches: a cold entry is only a slow page."""
+    try:
+        rebuilt = await auction_cache.warm_stats(db, await get_redis())
+        if rebuilt:
+            logger.info(f"Rebuilt {rebuilt} auction stats entries")
+    except Exception:
+        logger.exception("Auction stats warm-up failed")
+
+
 async def run_active_sync():
     async with async_session() as db:
         try:
@@ -267,6 +277,7 @@ async def run_ended_sync():
             f"Ended auction sync complete. {changes.ended_inserted} new, "
             f"{changes.active_changed} active removed."
         )
+        await _warm_stats(db)
 
 
 async def _sync_forever(name: str, run, interval: int) -> None:

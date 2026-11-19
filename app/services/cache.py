@@ -34,6 +34,10 @@ class CacheEntry:
     async def set(self, redis: Redis, value: Any, *parts: Any) -> None:
         await redis.setex(self.key(*parts), self.ttl, json.dumps(value))
 
+    async def ttl_remaining(self, redis: Redis, *parts: Any) -> int:
+        """Seconds left, or a negative number when the key is absent."""
+        return await redis.ttl(self.key(*parts))
+
     async def invalidate(self, redis: Redis, *parts: Any) -> None:
         await redis.delete(self.key(*parts))
 
@@ -72,10 +76,9 @@ OWNER_MATCHES = CacheEntry("owner_matches:", 1800)
 # Kept warm while a page is being browsed rather than expiring mid-session.
 USER_SEYMOURS = CacheEntry("user_seymours:", 60, refresh_on_read=True)
 
-# Both are dropped by the sync that changes the rows they describe rather than
-# by expiry, so the TTL is a backstop and a hotness signal, not the staleness
-# bound -- see app/services/auction_cache.py. Long enough that a live key means
-# somebody is still reading it; short enough to bound a missed invalidation.
+# Counts and top sales are dropped by the sync that changes their rows; the
+# aggregates below expire on this TTL, which is their staleness bound. See
+# app/services/auction_cache.py.
 AUCTION_TTL = 900
 
 # Only feeds a row-count label, but it is a full index scan of every matching

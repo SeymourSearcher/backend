@@ -70,7 +70,7 @@ async def value_collection(
     seymour_list: list[tuple[str, int]],
     include_dyes: bool = False,
 ) -> dict:
-    """Cached on the auction TTL and dropped by the sync that moves prices.
+    """Cached on the auction TTL, which bounds how stale the prices can be.
 
     Keyed by the collection's contents rather than by user, so two people
     holding the same items share the entry -- and so re-uploading an unchanged

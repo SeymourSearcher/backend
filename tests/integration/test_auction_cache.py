@@ -1,19 +1,19 @@
-"""The auction caches are now dropped by the sync rather than by expiry.
+"""Which auction caches a sync drops, which it leaves to their TTL, and which
+the worker keeps warm. See app/services/auction_cache.py.
 
-Two things make that safe, and neither is visible from the endpoint: a poll that
-inserts nothing must not touch the caches at all, and a poll that does insert
-must not rebuild an entry nobody is reading. Both are what stop the rewrite from
-turning a per-request cost into a permanent background one.
+None of this is visible from the endpoint: a poll that inserts nothing must not
+touch the caches, a new sale must not throw away the stats, and the warm-up must
+hit the exact keys the pages read.
 """
 import pytest
 
 from app.clock import utcnow
 from app.models import ActiveAuction, EndedAuction
-from app.services import auction_cache, auction_sync
+from app.services import auction_cache, auction_stats, auction_sync
 from app.services.auctions import SeymourEndedAuction
 from app.services.auction_queries import AuctionFilters, filters_key
 from app.services.auction_stats import compute_auction_stats
-from app.services.cache import AUCTION_COUNT, AUCTION_STATS
+from app.services.cache import AUCTION_COUNT, AUCTION_STATS, TOP_SALES
 from app.services.matching import get_tier
 
 pytestmark = pytest.mark.integration
@@ -67,21 +67,22 @@ async def test_a_poll_that_inserts_nothing_leaves_the_caches_alone(seeded, redis
     assert (await prime_stats(seeded, redis))["total"] == before["total"]
 
 
-async def test_a_hot_entry_is_rebuilt_with_the_new_rows(seeded, redis):
-    await prime_stats(seeded, redis)
+@pytest.mark.parametrize("filters", [DEFAULT, AuctionFilters(tier="t1", include_dyes=True)])
+async def test_a_new_sale_leaves_the_stats_to_their_ttl(seeded, redis, filters):
+    """One sale in ~250k cannot visibly move an aggregate, and dropping them on
+    every sale meant the TTL never applied."""
+    before = await prime_stats(seeded, redis, filters)
 
-    seeded.add(ended(999))
+    seeded.add(ended(1000))
     await seeded.commit()
     await auction_sync._refresh_caches(seeded, auction_sync.SyncChanges(ended_inserted=1))
 
-    cached = await AUCTION_STATS.get(redis, filters_key(EndedAuction, DEFAULT))
-    assert cached is not None, "a live entry should have been rebuilt, not just dropped"
-    assert cached["total"] == 31
+    cached = await AUCTION_STATS.get(redis, filters_key(EndedAuction, filters))
+    assert cached is not None
+    assert cached["total"] == before["total"]
 
 
 async def test_a_cold_entry_is_not_computed_just_because_rows_changed(seeded, redis):
-    """The whole point of using presence as the hotness signal: an idle site
-    must not pay the ~800ms scan every time an auction ends."""
     key = filters_key(EndedAuction, DEFAULT)
     assert await AUCTION_STATS.get(redis, key) is None
 
@@ -90,16 +91,57 @@ async def test_a_cold_entry_is_not_computed_just_because_rows_changed(seeded, re
     assert await AUCTION_STATS.get(redis, key) is None
 
 
-async def test_a_stale_entry_is_dropped_even_when_it_is_not_rebuilt(seeded, redis):
-    """Non-default filters are never rebuilt, so they have to be invalidated."""
-    narrow = AuctionFilters(tier="t1", include_dyes=True)
-    await prime_stats(seeded, redis, narrow)
-    key = filters_key(EndedAuction, narrow)
-    assert await AUCTION_STATS.get(redis, key) is not None
+async def test_a_new_sale_drops_the_row_level_entries(seeded, redis):
+    """The ticker and the row-count label describe rows a visitor can see."""
+    ended_key = filters_key(EndedAuction, AuctionFilters(tier="t1"))
+    await AUCTION_COUNT.set(redis, 7, ended_key)
+    await TOP_SALES.set(redis, [], 24, 20, True)
 
     await auction_sync._refresh_caches(seeded, auction_sync.SyncChanges(ended_inserted=1))
 
-    assert await AUCTION_STATS.get(redis, key) is None
+    assert await AUCTION_COUNT.get(redis, ended_key) is None
+    assert await TOP_SALES.get(redis, 24, 20, True) is None
+
+
+async def test_warming_fills_every_page_entry_once(seeded, redis):
+    assert await auction_cache.warm_stats(seeded, redis) == len(auction_cache.WARM_STATS)
+    assert await auction_cache.warm_stats(seeded, redis) == 0
+
+
+async def test_an_entry_near_expiry_is_rebuilt_with_the_new_rows(seeded, redis):
+    await auction_cache.warm_stats(seeded, redis)
+    seeded.add(ended(999))
+    await seeded.commit()
+
+    key = filters_key(EndedAuction, DEFAULT)
+    await redis.expire(AUCTION_STATS.key(key), auction_cache.REWARM_MARGIN_SECONDS - 1)
+
+    assert await auction_cache.warm_stats(seeded, redis) == 1
+    assert (await AUCTION_STATS.get(redis, key))["total"] == 31
+
+
+@pytest.mark.parametrize("query", ["", "?include_dyes=false", "?pieces=0", "?pieces=3"])
+async def test_the_warmed_keys_are_the_ones_the_pages_read(client, db, redis, monkeypatch, query):
+    """WARM_STATS has to equal what the router builds from these query strings.
+    If it drifts, warming still 'works' -- against keys nobody reads."""
+    db.add_all([ended(i) for i in range(30)])
+    await db.commit()
+    await auction_cache.warm_stats(db, redis)
+
+    async def no_recompute(*a):
+        pytest.fail("a warmed page recomputed its stats")
+
+    monkeypatch.setattr(auction_stats, "_compute", no_recompute)
+
+    assert (await client.get(f"/auctions/stats{query}")).status_code == 200
+
+
+async def test_a_warm_up_failure_does_not_propagate(seeded, monkeypatch):
+    async def boom(*a):
+        raise RuntimeError("redis down")
+
+    monkeypatch.setattr(auction_sync, "get_redis", boom)
+    await auction_sync._warm_stats(seeded)
 
 
 async def test_ended_changes_do_not_disturb_the_active_count(seeded, redis):
@@ -169,21 +211,18 @@ async def test_the_ended_sync_reports_what_it_changed(db, monkeypatch):
     assert await auction_sync.sync_ended_auctions(db) == auction_sync.SyncChanges()
 
 
-async def test_the_warmed_key_is_the_one_the_default_request_reads(client, db, redis):
-    """DEFAULT_FILTERS has to equal what the router builds from an empty query
-    string. If it drifts, warming still 'works' -- against a key nobody reads."""
+async def test_a_hot_count_is_rebuilt_under_the_key_the_default_request_reads(client, db, redis):
     db.add_all([ended(i) for i in range(30)])
     await db.commit()
 
-    assert (await client.get("/auctions/stats")).json()["total"] == 30
+    assert (await client.get("/auctions/ended")).json()["total"] == 30
 
     db.add(ended(999))
     await db.commit()
     await auction_sync._refresh_caches(db, auction_sync.SyncChanges(ended_inserted=1))
 
-    # Served straight from the entry the sync rebuilt, without recomputing.
-    assert await AUCTION_STATS.exists(redis, filters_key(EndedAuction, DEFAULT))
-    assert (await client.get("/auctions/stats")).json()["total"] == 31
+    assert await AUCTION_COUNT.get(redis, filters_key(EndedAuction, DEFAULT)) == 31
+    assert (await client.get("/auctions/ended")).json()["total"] == 31
 
 
 async def test_a_refresh_failure_does_not_propagate(seeded, monkeypatch):
