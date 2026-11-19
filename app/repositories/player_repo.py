@@ -1,9 +1,9 @@
 from datetime import datetime
 
-from sqlalchemy import select, union, update
+from sqlalchemy import delete, exists, select, union, update
 from sqlalchemy.dialects.mysql import insert
 
-from app.models import ActiveAuction, EndedAuction, Player
+from app.models import ActiveAuction, EndedAuction, Player, PlayerLookupFailure
 from app.models.auction import Bid
 from app.repositories.base import BaseRepository
 
@@ -14,6 +14,13 @@ from app.repositories.base import BaseRepository
 # ~2 days of auctions against a 60s cycle. Sized to stay a backward index scan:
 # widening it past a few thousand rows tips the optimizer into a full scan.
 RECENT_ENDED = 2_000
+
+
+def _not_recently_failed(uuid_column, retry_cutoff: datetime):
+    return ~exists().where(
+        PlayerLookupFailure.uuid == uuid_column,
+        PlayerLookupFailure.failed_at >= retry_cutoff,
+    )
 
 
 class PlayerRepository(BaseRepository):
@@ -31,7 +38,19 @@ class PlayerRepository(BaseRepository):
             )
         )
 
-    async def unresolved_uuids(self, limit: int) -> list[str]:
+    async def record_failures(self, uuids: list[str], now: datetime) -> None:
+        if not uuids:
+            return
+        stmt = insert(PlayerLookupFailure).values([{"uuid": u, "failed_at": now} for u in uuids])
+        await self.session.execute(stmt.on_duplicate_key_update(failed_at=stmt.inserted.failed_at))
+
+    async def clear_failures(self, uuids: list[str]) -> None:
+        if uuids:
+            await self.session.execute(
+                delete(PlayerLookupFailure).where(PlayerLookupFailure.uuid.in_(uuids))
+            )
+
+    async def unresolved_uuids(self, limit: int, retry_cutoff: datetime) -> list[str]:
         """Recently-seen uuids with no players row at all.
 
         A CTE, not a subquery: seller and buyer both read the recent window, and
@@ -57,6 +76,7 @@ class PlayerRepository(BaseRepository):
             select(seen.c.u)
             .outerjoin(Player, Player.uuid == seen.c.u)
             .where(Player.uuid.is_(None), seen.c.u.isnot(None), seen.c.u != "")
+            .where(_not_recently_failed(seen.c.u, retry_cutoff))
             .limit(limit)
         )
         return list(rows.scalars().all())
@@ -67,7 +87,9 @@ class PlayerRepository(BaseRepository):
             update(Player).where(Player.uuid.in_(uuids)).values(last_updated=now)
         )
 
-    async def stale_players(self, limit: int, cutoff: datetime) -> list[tuple[str, str]]:
+    async def stale_players(
+        self, limit: int, cutoff: datetime, retry_cutoff: datetime
+    ) -> list[tuple[str, str]]:
         """(uuid, username) past their refresh age, oldest first.
 
         The username comes back because revalidating in bulk needs it as the
@@ -76,6 +98,7 @@ class PlayerRepository(BaseRepository):
         rows = await self.session.execute(
             select(Player.uuid, Player.username)
             .where(Player.last_updated < cutoff)
+            .where(_not_recently_failed(Player.uuid, retry_cutoff))
             .order_by(Player.last_updated)
             .limit(limit)
         )

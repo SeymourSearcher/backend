@@ -25,12 +25,12 @@ from app.clock import utcnow as _utcnow
 
 logger = logging.getLogger(__name__)
 
-# ashcon proxies uuid->name and absorbs far more of it than Mojang serves
-# directly. Over 250 sustained requests at 4/s: ashcon 250/250, Mojang's own
-# api.minecraftservices.com 215/250 (refusing from #122), sessionserver 135/250
-# (from #9). Going to the origin is the intuitive move and the wrong one.
-PROFILE_URL = "https://api.ashcon.app/mojang/v2/user/{}"
-PROFILE_NAME_KEY = "username"
+# Earlier measurement at 4/s favoured the api.ashcon.app proxy (250/250 vs 215/250
+# here), but by 2026-11 ashcon refused nearly every request from production
+# (~10k 429s/hour) while this host served 60/60 at 2/s. Re-measure before
+# switching back.
+PROFILE_URL = "https://api.minecraftservices.com/minecraft/profile/lookup/{}"
+PROFILE_NAME_KEY = "name"
 
 BULK_URL = "https://api.mojang.com/profiles/minecraft"
 
@@ -38,7 +38,7 @@ BULK_URL = "https://api.mojang.com/profiles/minecraft"
 BULK_SIZE = 10
 
 # Both measured over a few hundred sustained requests, not a burst.
-PROFILE_RPS = 4
+PROFILE_RPS = 2
 BULK_RPS = 10
 
 MAX_CONNECTIONS = 25

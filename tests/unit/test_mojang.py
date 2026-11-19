@@ -6,6 +6,7 @@ MockTransport bypasses the connection pool entirely, so it reports whatever
 concurrency asyncio.gather produces and would pass with any limit configured.
 """
 import asyncio
+import json
 import threading
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -130,7 +131,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             import time
             time.sleep(0.15)
-            body = b'{"username": "someone"}'
+            body = json.dumps({mojang.PROFILE_NAME_KEY: "someone"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

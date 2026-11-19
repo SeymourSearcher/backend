@@ -20,7 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clock import utcnow
 from app.database import async_session
 from app.repositories.player_repo import PlayerRepository
-from app.services.player import REFRESH_AFTER, resolve_names, revalidate_names
+from app.services.player import (
+    REFRESH_AFTER, RETRY_FAILED_AFTER, resolve_names, revalidate_names,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +38,13 @@ STALE_BATCH = 200
 
 async def refresh_players(db: AsyncSession) -> tuple[int, int, int]:
     repo = PlayerRepository(db)
+    retry_cutoff = utcnow() - RETRY_FAILED_AFTER
 
-    unresolved = await repo.unresolved_uuids(UNRESOLVED_BATCH)
+    unresolved = await repo.unresolved_uuids(UNRESOLVED_BATCH, retry_cutoff)
     if unresolved:
         await resolve_names(db, unresolved)
 
-    stale = await repo.stale_players(STALE_BATCH, utcnow() - REFRESH_AFTER)
+    stale = await repo.stale_players(STALE_BATCH, utcnow() - REFRESH_AFTER, retry_cutoff)
     confirmed, changed = await revalidate_names(db, stale)
 
     return len(unresolved), confirmed, changed
@@ -66,6 +69,6 @@ async def player_refresh_loop():
                     f"Player refresh: {new} newly resolved, "
                     f"{confirmed} confirmed, {changed} renamed."
                 )
-        except Exception as e:
-            logger.error(f"Player refresh loop error: {e}")
+        except Exception:
+            logger.exception("Player refresh failed")
         await asyncio.sleep(REFRESH_INTERVAL)

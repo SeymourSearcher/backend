@@ -17,3 +17,12 @@ class Player(Base):
     uuid: Mapped[str] = mapped_column(String(32), primary_key=True)
     username: Mapped[str] = mapped_column(String(16))
     last_updated: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PlayerLookupFailure(Base):
+    """A uuid whose latest upstream lookup failed, held back from the refresh
+    queues for a while. See app/services/player_sync.py."""
+    __tablename__ = "player_lookup_failures"
+
+    uuid: Mapped[str] = mapped_column(String(32), primary_key=True)
+    failed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 # Nothing expires on read -- a name past this age is still served.
 REFRESH_AFTER = timedelta(days=25)
 
+# How long a failed lookup sits out of the refresh queues. Without it the same
+# unresolvable uuids head both queues every cycle and starve everything behind
+# them -- which froze the players table from 2026-10-02 to 2026-11-19.
+RETRY_FAILED_AFTER = timedelta(hours=6)
+
 
 def _by_clean(uuids: list[str]) -> dict[str, str]:
     """Dash-stripped uuid -> the form the caller passed, which keys the result."""
@@ -76,17 +81,21 @@ async def resolve_names(db: AsyncSession, uuids: list[str]) -> dict[str, str]:
 
     fetched = await asyncio.gather(*[mojang.name_for_uuid(clean) for clean, _, _ in to_fetch])
 
-    new_players = []
+    new_players, failed = [], []
     for (clean, original, player), username in zip(to_fetch, fetched):
         if username:
             new_players.append({"uuid": clean, "username": username, "last_updated": now})
             names[original] = username
-        elif player:
-            names[original] = player.username
+        else:
+            failed.append(clean)
+            if player:
+                names[original] = player.username
 
     if new_players:
         await repo.upsert(new_players)
-        await db.commit()
+        await repo.clear_failures([row["uuid"] for row in new_players])
+    await repo.record_failures(failed, now)
+    await db.commit()
 
     return names
 
