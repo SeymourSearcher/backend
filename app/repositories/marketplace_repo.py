@@ -147,6 +147,14 @@ class BuyOrderRepository(BaseRepository):
         )
         return list(rows.scalars().all()), total
 
+    async def count_active_for_user(self, user_id: int) -> int:
+        return await self.session.scalar(
+            select(func.count())
+            .select_from(BuyOrder)
+            .where(BuyOrder.user_id == user_id)
+            .where(status_filter(BuyOrder, OrderStatus.ACTIVE))
+        ) or 0
+
     async def list_active_excluding(self, user_id: int) -> list[BuyOrder]:
         """Every open order from someone else; matching happens in Python."""
         rows = await self.session.execute(self._active().where(BuyOrder.user_id != user_id))

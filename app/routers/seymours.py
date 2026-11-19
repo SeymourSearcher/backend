@@ -15,6 +15,12 @@ from app.schemas import (
 )
 from app.services import seymours
 from app.models import User
+from app.rate_limit import RateLimit, user_limiter
+
+# Upload and delete each rebuild the owner-hex table and clear every hex-page
+# cache, so one account looping them keeps the database busy for everyone.
+COLLECTION_WRITE_LIMIT = RateLimit("collection_write", 10, 60)
+_collection_write = [Depends(user_limiter(COLLECTION_WRITE_LIMIT))]
 
 router = APIRouter()
 
@@ -86,7 +92,7 @@ async def list_seymours(
     )
 
 
-@router.post("/upload", response_model=UploadResponse)
+@router.post("/upload", response_model=UploadResponse, dependencies=_collection_write)
 async def upload_seymours(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -107,7 +113,7 @@ async def get_seymour(
     return await seymours.get_owned(db, user, seymour_id)
 
 
-@router.delete("/{seymour_id}", response_model=DetailResponse)
+@router.delete("/{seymour_id}", response_model=DetailResponse, dependencies=_collection_write)
 async def delete_seymour(
     seymour_id: int,
     user: Annotated[User, Depends(get_current_user)],
@@ -118,7 +124,7 @@ async def delete_seymour(
     return {"detail": "Deleted"}
 
 
-@router.delete("/", response_model=RemovalResponse)
+@router.delete("/", response_model=RemovalResponse, dependencies=_collection_write)
 async def delete_all_seymours(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],

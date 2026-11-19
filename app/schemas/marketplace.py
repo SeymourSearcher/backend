@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from app.models.marketplace import OrderType, OrderStatus, HexMatchType, Tier
 from app.pieces import Piece
 from app.schemas.common import MatchBrief, PublicUser, SeymourBrief
+from app.schemas.fields import Price
 
 HEX6 = re.compile(r"^[0-9A-F]{6}$")
 
@@ -41,17 +42,10 @@ class HexCriteriaCreate(BaseModel):
 
 
 class BuyOrderCreate(BaseModel):
-    price: int
+    price: Price
     order_type: OrderType
     set_criteria: SetCriteriaCreate | None = None
     hex_criteria: HexCriteriaCreate | None = None
-
-    @field_validator("price")
-    @classmethod
-    def validate_price(cls, v):
-        if v <= 0:
-            raise ValueError("price must be positive")
-        return v
 
 
 class SetCriteriaResponse(BaseModel):
@@ -106,7 +100,7 @@ class FillableOrderResponse(BaseModel):
 
 class SellOrderCreate(BaseModel):
     seymour_ids: list[int]
-    price: int
+    price: Price
     expires_hours: int = 48
 
     @field_validator("seymour_ids")
@@ -117,13 +111,6 @@ class SellOrderCreate(BaseModel):
         if len(v) > 50:
             raise ValueError("maximum 50 seymours per request")
         return list(set(v))
-
-    @field_validator("price")
-    @classmethod
-    def validate_price(cls, v):
-        if v <= 0:
-            raise ValueError("price must be positive")
-        return v
 
     @field_validator("expires_hours")
     @classmethod

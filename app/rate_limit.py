@@ -16,7 +16,8 @@ from fastapi import Depends, HTTPException, Request, status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from app.dependencies import get_redis
+from app.dependencies import get_current_user, get_redis
+from app.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +56,17 @@ async def _consume(redis: Redis, key: str, rl: RateLimit) -> tuple[bool, int]:
     return current <= rl.limit, max(0, ttl)
 
 
-async def enforce(rl: RateLimit, request: Request, redis: Redis) -> None:
-    allowed, retry_after = await _consume(redis, f"{rl.bucket}:{client_ip(request)}", rl)
+async def _enforce_for(rl: RateLimit, identity: str, redis: Redis) -> None:
+    allowed, retry_after = await _consume(redis, f"{rl.bucket}:{identity}", rl)
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Rate limit exceeded. Try again in {retry_after} seconds.",
         )
+
+
+async def enforce(rl: RateLimit, request: Request, redis: Redis) -> None:
+    await _enforce_for(rl, client_ip(request), redis)
 
 
 def limiter(rl: RateLimit) -> Callable:
@@ -70,6 +75,17 @@ def limiter(rl: RateLimit) -> Callable:
         request: Request, redis: Annotated[Redis, Depends(get_redis)]
     ) -> None:
         await enforce(rl, request, redis)
+
+    return dependency
+
+
+def user_limiter(rl: RateLimit) -> Callable:
+    """`rl` per signed-in account, so rotating addresses doesn't reset it."""
+    async def dependency(
+        user: Annotated[User, Depends(get_current_user)],
+        redis: Annotated[Redis, Depends(get_redis)],
+    ) -> None:
+        await _enforce_for(rl, f"user:{user.id}", redis)
 
     return dependency
 

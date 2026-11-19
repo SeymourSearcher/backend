@@ -19,6 +19,9 @@ from app.services import buy_orders, sell_orders
 from app.services.buy_orders import BuyOrderFilters
 from app.services.marketplace import get_all_sets_pieces
 from app.services.sell_orders import SellOrderFilters
+from app.rate_limit import RateLimit, user_limiter
+
+ORDER_CREATE_LIMIT = RateLimit("order_create", 10, 60)
 
 router = APIRouter()
 
@@ -28,7 +31,11 @@ async def get_sets_pieces():
     return get_all_sets_pieces()
 
 
-@router.post("/orders", response_model=BuyOrderResponse)
+@router.post(
+    "/orders",
+    response_model=BuyOrderResponse,
+    dependencies=[Depends(user_limiter(ORDER_CREATE_LIMIT))],
+)
 async def create_order(
     data: BuyOrderCreate,
     user: Annotated[User, Depends(get_current_user)],
@@ -99,7 +106,11 @@ async def list_fillable_orders(
     return await buy_orders.list_fillable(db, user, sort_by, sort_order, skip, limit)
 
 
-@router.post("/orders/sell", response_model=list[SellOrderResponse])
+@router.post(
+    "/orders/sell",
+    response_model=list[SellOrderResponse],
+    dependencies=[Depends(user_limiter(ORDER_CREATE_LIMIT))],
+)
 async def create_sell_orders(
     data: SellOrderCreate,
     user: Annotated[User, Depends(get_current_user)],

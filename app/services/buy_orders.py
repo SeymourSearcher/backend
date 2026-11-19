@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.errors import InvalidInputError, NotFoundError
+from app.errors import ConflictError, InvalidInputError, NotFoundError
 from app.models import BuyOrder, OrderStatus, OrderType, Seymour, User
 # Re-exported so routers reach the filter type through this service rather than
 # the repository layer.
@@ -14,6 +14,10 @@ from app.services.marketplace import (
     seymour_matches_set_order,
     with_derived_status,
 )
+
+# list_matching and list_fillable scan every active order in Python on each
+# request, so the order book's size is the cost of those pages.
+MAX_ACTIVE_BUY_ORDERS = 25
 
 
 def _validate(data: BuyOrderCreate) -> None:
@@ -56,6 +60,12 @@ async def create(db: AsyncSession, user: User, data: BuyOrderCreate) -> BuyOrder
     _validate(data)
 
     orders = BuyOrderRepository(db)
+    # Not race-proof; the per-user create rate limit bounds any overshoot.
+    if await orders.count_active_for_user(user.id) >= MAX_ACTIVE_BUY_ORDERS:
+        raise ConflictError(
+            f"You can have at most {MAX_ACTIVE_BUY_ORDERS} active buy orders. "
+            "Cancel one to place another."
+        )
     order = await orders.add(user.id, data.price, data.order_type)
 
     if data.set_criteria:
