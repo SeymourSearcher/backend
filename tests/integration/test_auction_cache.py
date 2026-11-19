@@ -189,7 +189,7 @@ async def test_a_partly_seen_batch_counts_only_the_new_rows(db):
 
 
 async def test_the_ended_sync_reports_what_it_changed(db, monkeypatch):
-    async def payload():
+    async def payload(client):
         return {"auctions": [{"auction_id": "e00000"}]}
 
     monkeypatch.setattr(auction_sync, "get_auctions_ended", payload)
@@ -201,14 +201,14 @@ async def test_the_ended_sync_reports_what_it_changed(db, monkeypatch):
     ))
     await db.commit()
 
-    changes = await auction_sync.sync_ended_auctions(db)
+    changes = await auction_sync.sync_ended_auctions(db, None)
     await db.commit()
 
     assert changes.ended_inserted == 1
     assert changes.active_changed == 1, "the ended auction should have left active_auctions"
 
     # The same payload again: Hypixel has not refreshed, so nothing changed.
-    assert await auction_sync.sync_ended_auctions(db) == auction_sync.SyncChanges()
+    assert await auction_sync.sync_ended_auctions(db, None) == auction_sync.SyncChanges()
 
 
 async def test_a_hot_count_is_rebuilt_under_the_key_the_default_request_reads(client, db, redis):

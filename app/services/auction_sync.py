@@ -1,23 +1,24 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from functools import partial
 
 import httpx
-from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select
 from sqlalchemy.dialects.mysql import insert
 
 from app.clock import utcnow
 from app.database import async_session
 from app.dependencies import get_redis
-from app.models import ActiveAuction, EndedAuction, Bid
+from app.models import EndedAuction
+from app.repositories.auction_repo import AuctionRepository
 from app.services import auction_cache
 from app.services.matching import match_columns
 from app.services.auctions import (
     get_all_auctions,
     get_auctions_ended,
+    new_client,
     parse_active_auction,
     parse_ended_auction,
     SeymourAuction,
@@ -28,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 ACTIVE_SYNC_INTERVAL = 120
 ENDED_SYNC_INTERVAL = 30
-STALE_THRESHOLD_MINUTES = 10
 BATCH_SIZE = 500
 
 
@@ -46,6 +46,10 @@ class SyncChanges:
     active_changed: int = 0
 
 
+def _batches(items: list) -> list[list]:
+    return [items[i:i + BATCH_SIZE] for i in range(0, len(items), BATCH_SIZE)]
+
+
 async def _new_ids(db: AsyncSession, model, ids: set[str]) -> int:
     """How many of these auction_ids the table does not already hold.
 
@@ -59,13 +63,13 @@ async def _new_ids(db: AsyncSession, model, ids: set[str]) -> int:
     return len(ids - set(existing))
 
 
-async def upsert_active_auctions_batch(db: AsyncSession, auctions: list[SeymourAuction]) -> int:
+async def upsert_active_auctions_batch(db: AsyncSession, auctions: list[SeymourAuction]) -> None:
     if not auctions:
-        return 0
+        return
 
     now = utcnow()
     matches = match_columns([a.hex_color for a in auctions])
-    values = [
+    await AuctionRepository(db).upsert_active([
         {
             "auction_id": a.auction_id,
             "seller_uuid": a.seller,
@@ -80,18 +84,7 @@ async def upsert_active_auctions_batch(db: AsyncSession, auctions: list[SeymourA
             **matches[a.hex_color.upper()],
         }
         for a in auctions
-    ]
-
-    inserted = await _new_ids(db, ActiveAuction, {a.auction_id for a in auctions})
-
-    stmt = insert(ActiveAuction).values(values)
-    stmt = stmt.on_duplicate_key_update(
-        price=stmt.inserted.price,
-        end_time=stmt.inserted.end_time,
-        last_updated=stmt.inserted.last_updated,
-    )
-    await db.execute(stmt)
-    return inserted
+    ])
 
 
 async def upsert_ended_auctions_batch(db: AsyncSession, auctions: list[SeymourEndedAuction]) -> int:
@@ -130,16 +123,10 @@ async def sync_bids_batch(db: AsyncSession, auctions: list[SeymourAuction]):
     auctions_with_bids = [a for a in auctions if not a.is_bin and a.bids]
     if not auctions_with_bids:
         return
-    
-    auction_ids = [a.auction_id for a in auctions_with_bids]
-    
-    existing = await db.execute(
-        select(Bid.auction_id, Bid.timestamp).where(Bid.auction_id.in_(auction_ids))
-    )
-    existing_by_auction: dict[str, set[int]] = {}
-    for auction_id, timestamp in existing.fetchall():
-        existing_by_auction.setdefault(auction_id, set()).add(timestamp)
-    
+
+    repo = AuctionRepository(db)
+    existing_by_auction = await repo.bid_timestamps([a.auction_id for a in auctions_with_bids])
+
     new_bids = []
     for auction in auctions_with_bids:
         existing_timestamps = existing_by_auction.get(auction.auction_id, set())
@@ -151,66 +138,53 @@ async def sync_bids_batch(db: AsyncSession, auctions: list[SeymourAuction]):
                     "amount": b.amount,
                     "timestamp": b.timestamp,
                 })
-    
+
     if new_bids:
-        await db.execute(insert(Bid).values(new_bids))
+        await repo.insert_bids(new_bids)
 
 
-async def sync_active_auctions(db: AsyncSession) -> tuple[set[str], SyncChanges]:
-    """Upsert the full active feed, then drop rows it has not refreshed lately.
+async def sync_active_auctions(
+    db: AsyncSession, client: httpx.AsyncClient
+) -> tuple[set[str], SyncChanges]:
+    """Write the listings that are new or changed, then delete the ones the feed
+    no longer has.
 
-    The sweep lives here, after a complete fetch, rather than on a timer: when it
-    ran from the ended sync, a run of failed polls aged every row past the
-    threshold and emptied the table (bids cascade with it).
+    Deleting by absence is only safe because get_all_auctions raises rather than
+    return a partial feed. An empty feed deletes nothing either: it is far more
+    likely an upstream glitch than every Seymour listing ending at once. The
+    delete used to be an age sweep run from the ended sync, and a run of failed
+    polls emptied the table (bids cascade with it).
     """
-    raw_auctions = await get_all_auctions()
+    auctions = [a for raw in await get_all_auctions(client) if (a := parse_active_auction(raw))]
+    repo = AuctionRepository(db)
+    existing = await repo.active_listing_state()
 
-    parsed_auctions = []
-    for raw in raw_auctions:
-        parsed = parse_active_auction(raw)
-        if parsed:
-            parsed_auctions.append(parsed)
-
-    active_ids = {a.auction_id for a in parsed_auctions}
-    inserted = 0
-
-    for i in range(0, len(parsed_auctions), BATCH_SIZE):
-        batch = parsed_auctions[i:i + BATCH_SIZE]
-        inserted += await upsert_active_auctions_batch(db, batch)
+    changed = [a for a in auctions if existing.get(a.auction_id) != (a.price, a.end_time)]
+    for batch in _batches(changed):
+        await upsert_active_auctions_batch(db, batch)
+    for batch in _batches(auctions):
         await sync_bids_batch(db, batch)
 
-    stale_cutoff = utcnow() - timedelta(minutes=STALE_THRESHOLD_MINUTES)
-    swept = (await db.execute(
-        delete(ActiveAuction).where(ActiveAuction.last_updated < stale_cutoff)
-    )).rowcount
+    active_ids = {a.auction_id for a in auctions}
+    removed = await repo.delete_active(set(existing) - active_ids) if active_ids else 0
+    inserted = sum(1 for a in changed if a.auction_id not in existing)
 
-    return active_ids, SyncChanges(active_changed=inserted + swept)
+    return active_ids, SyncChanges(active_changed=inserted + removed)
 
 
-async def sync_ended_auctions(db: AsyncSession) -> SyncChanges:
-    data = await get_auctions_ended()
-    raw_ended = data.get("auctions", [])
+async def sync_ended_auctions(db: AsyncSession, client: httpx.AsyncClient) -> SyncChanges:
+    data = await get_auctions_ended(client)
+    parsed_auctions = [
+        a for raw in data.get("auctions", []) if (a := parse_ended_auction(raw))
+    ]
 
-    parsed_auctions = []
-    for raw in raw_ended:
-        parsed = parse_ended_auction(raw)
-        if parsed:
-            parsed_auctions.append(parsed)
-
-    ended_ids = {a.auction_id for a in parsed_auctions}
     inserted = 0
-
-    for i in range(0, len(parsed_auctions), BATCH_SIZE):
-        batch = parsed_auctions[i:i + BATCH_SIZE]
+    for batch in _batches(parsed_auctions):
         inserted += await upsert_ended_auctions_batch(db, batch)
 
     # DELETE rowcount is the number actually removed regardless of the dialect's
     # FOUND_ROWS flag, unlike the upserts above.
-    removed = 0
-    if ended_ids:
-        removed = (await db.execute(
-            delete(ActiveAuction).where(ActiveAuction.auction_id.in_(ended_ids))
-        )).rowcount
+    removed = await AuctionRepository(db).delete_active({a.auction_id for a in parsed_auctions})
 
     return SyncChanges(ended_inserted=inserted, active_changed=removed)
 
@@ -246,10 +220,10 @@ async def _warm_stats(db: AsyncSession) -> None:
         logger.exception("Auction stats warm-up failed")
 
 
-async def run_active_sync():
+async def run_active_sync(client: httpx.AsyncClient):
     async with async_session() as db:
         try:
-            active_ids, changes = await sync_active_auctions(db)
+            active_ids, changes = await sync_active_auctions(db, client)
             await db.commit()
         except Exception:
             await db.rollback()
@@ -258,15 +232,15 @@ async def run_active_sync():
         await _refresh_caches(db, changes)
         logger.info(
             f"Active auction sync complete. {len(active_ids)} active auctions, "
-            f"{changes.active_changed} added or swept."
+            f"{changes.active_changed} added or removed."
         )
         return active_ids
 
 
-async def run_ended_sync():
+async def run_ended_sync(client: httpx.AsyncClient):
     async with async_session() as db:
         try:
-            changes = await sync_ended_auctions(db)
+            changes = await sync_ended_auctions(db, client)
             await db.commit()
         except Exception:
             await db.rollback()
@@ -294,7 +268,9 @@ async def _sync_forever(name: str, run, interval: int) -> None:
 
 
 async def start_sync_loop():
-    await asyncio.gather(
-        _sync_forever("Active", run_active_sync, ACTIVE_SYNC_INTERVAL),
-        _sync_forever("Ended", run_ended_sync, ENDED_SYNC_INTERVAL),
-    )
+    """Owns the Hypixel client: closed when the loop is cancelled at shutdown."""
+    async with new_client() as client:
+        await asyncio.gather(
+            _sync_forever("Active", partial(run_active_sync, client), ACTIVE_SYNC_INTERVAL),
+            _sync_forever("Ended", partial(run_ended_sync, client), ENDED_SYNC_INTERVAL),
+        )

@@ -5,6 +5,7 @@ import gzip
 import io
 from dataclasses import dataclass
 import nbtlib
+import orjson
 
 from app.pieces import ITEM_ID_TO_PIECE, ITEM_NAMES
 
@@ -59,12 +60,18 @@ def _retryable(exc: Exception) -> bool:
     return isinstance(exc, httpx.TransportError)
 
 
+def new_client() -> httpx.AsyncClient:
+    """One per sync loop, reused across polls: a client per poll paid a fresh
+    TLS handshake and SSL context load every time (~7% of worker CPU)."""
+    return httpx.AsyncClient(timeout=TIMEOUT)
+
+
 async def _get_json(client: httpx.AsyncClient, path: str, params: dict | None = None) -> dict:
     for attempt in range(1, ATTEMPTS + 1):
         try:
             response = await client.get(f"{BASE_URL}/{path}", params=params)
             response.raise_for_status()
-            return response.json()
+            return orjson.loads(response.content)
         except httpx.HTTPError as exc:
             if attempt == ATTEMPTS or not _retryable(exc):
                 raise
@@ -72,32 +79,42 @@ async def _get_json(client: httpx.AsyncClient, path: str, params: dict | None = 
     raise AssertionError("unreachable")
 
 
-async def get_all_auctions() -> list[dict]:
-    """Every page of the active auction feed, or an exception: never a partial list.
+def is_seymour_listing(auction: dict) -> bool:
+    item_name = auction.get("item_name", "")
+    return any(name in item_name for name in ITEM_NAMES)
 
-    Callers sweep rows this poll did not refresh, so a silently missing page
-    would read as those auctions having ended.
+
+def _seymour_listings(page: dict) -> list[dict]:
+    return [a for a in page.get("auctions", []) if is_seymour_listing(a)]
+
+
+async def get_all_auctions(client: httpx.AsyncClient) -> list[dict]:
+    """The Seymour listings on every page of the active feed, or an exception:
+    never a partial list.
+
+    Callers delete rows this poll did not see, so a silently missing page
+    would read as those auctions having ended. Each ~1MB page is filtered as it
+    arrives, so only a few hundred listings are ever held at once.
     """
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        first_page = await _get_json(client, "auctions", {"page": 0})
-        total_pages = first_page.get("totalPages", 1)
-        all_auctions = first_page.get("auctions", [])
+    first_page = await _get_json(client, "auctions", {"page": 0})
+    total_pages = first_page.get("totalPages", 1)
+    listings = _seymour_listings(first_page)
+    del first_page
 
-        gate = asyncio.Semaphore(PAGE_CONCURRENCY)
+    gate = asyncio.Semaphore(PAGE_CONCURRENCY)
 
-        async def fetch(page: int) -> dict:
-            async with gate:
-                return await _get_json(client, "auctions", {"page": page})
+    async def fetch(page: int) -> list[dict]:
+        async with gate:
+            return _seymour_listings(await _get_json(client, "auctions", {"page": page}))
 
-        for result in await asyncio.gather(*(fetch(p) for p in range(1, total_pages))):
-            all_auctions.extend(result.get("auctions", []))
+    for page_listings in await asyncio.gather(*(fetch(p) for p in range(1, total_pages))):
+        listings.extend(page_listings)
 
-        return all_auctions
+    return listings
 
 
-async def get_auctions_ended() -> dict:
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        return await _get_json(client, "auctions_ended")
+async def get_auctions_ended(client: httpx.AsyncClient) -> dict:
+    return await _get_json(client, "auctions_ended")
 
 
 def decode_item_bytes(item_bytes: str) -> nbtlib.Compound:
@@ -142,8 +159,7 @@ def parse_bids(raw_bids: list[dict]) -> list[AuctionBid]:
 
 
 def parse_active_auction(auction: dict) -> SeymourAuction | None:
-    item_name = auction.get("item_name", "")
-    if not any(name in item_name for name in ITEM_NAMES):
+    if not is_seymour_listing(auction):
         return None
     item_bytes = auction.get("item_bytes")
     if not item_bytes:
@@ -193,12 +209,12 @@ def parse_ended_auction(auction: dict) -> SeymourEndedAuction | None:
     )
 
 
-async def get_active_seymour_auctions() -> list[SeymourAuction]:
-    auctions = await get_all_auctions()
+async def get_active_seymour_auctions(client: httpx.AsyncClient) -> list[SeymourAuction]:
+    auctions = await get_all_auctions(client)
     return [a for auction in auctions if (a := parse_active_auction(auction))]
 
 
-async def get_ended_seymour_auctions() -> list[SeymourEndedAuction]:
-    data = await get_auctions_ended()
+async def get_ended_seymour_auctions(client: httpx.AsyncClient) -> list[SeymourEndedAuction]:
+    data = await get_auctions_ended(client)
     auctions = data.get("auctions", [])
     return [a for auction in auctions if (a := parse_ended_auction(auction))]

@@ -9,18 +9,21 @@ import asyncio
 from app.services.auctions import (
     get_active_seymour_auctions,
     get_ended_seymour_auctions,
+    new_client,
 )
 
 PREVIEW = 5
 
 
 async def main() -> None:
-    active = await get_active_seymour_auctions()
+    async with new_client() as client:
+        active = await get_active_seymour_auctions(client)
+        ended = await get_ended_seymour_auctions(client)
+
     print(f"active: {len(active)}")
     for a in active[:PREVIEW]:
         print(f"  {a.hex_color} piece={a.piece} price={a.price} bin={a.is_bin}")
 
-    ended = await get_ended_seymour_auctions()
     print(f"ended: {len(ended)}")
     for a in ended[:PREVIEW]:
         print(f"  {a.hex_color} piece={a.piece} price={a.price}")
