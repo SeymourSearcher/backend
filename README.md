@@ -56,7 +56,7 @@ Settings are read from the environment or from `.env` in the repository root.
 | `DATABASE_URL` | yes | SQLAlchemy URL, e.g. `mysql+aiomysql://user:pass@localhost:3306/seymour_finder` |
 | `REDIS_URL` | no | Defaults to `redis://localhost:6379` |
 | `JWT_SECRET` | yes | Signing key for session tokens. Generate one per environment with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"` |
-| `JWT_EXPIRE_MINUTES` | no | Token lifetime, default 30 |
+| `JWT_EXPIRE_MINUTES` | no | Token lifetime in minutes, default 7200 (5 days) |
 | `DISCORD_CLIENT_ID` | yes | From your Discord application |
 | `DISCORD_CLIENT_SECRET` | yes | From your Discord application |
 | `DISCORD_REDIRECT_URI` | yes | The frontend's `/auth/callback` URL, registered with Discord |

@@ -13,7 +13,7 @@ JWT_ALGORITHM = "HS256"
 class Settings(BaseSettings):
     database_url: str
     jwt_secret: str
-    jwt_expire_minutes: int = 30
+    jwt_expire_minutes: int = 7200
     
     discord_client_id: str
     discord_client_secret: str
