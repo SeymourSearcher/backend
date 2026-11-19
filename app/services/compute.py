@@ -22,43 +22,9 @@ except ImportError:
     )
 
 from app.pieces import PIECE_COUNT, Piece, SLOT_TO_PIECE
+from app.services.lab_table import STATIC_DIR, load_lab_table
 
-def _build_lab_table():
-    #Makes mapping of RGB -> LAB
-    rgb = np.arange(0x1000000, dtype=np.uint32)
-    r = ((rgb >> 16) & 0xFF).astype(np.float32) / 255.0
-    g = ((rgb >> 8) & 0xFF).astype(np.float32) / 255.0
-    b = (rgb & 0xFF).astype(np.float32) / 255.0
-    
-    def to_linear(c):
-        mask = c > 0.04045
-        c[mask] = ((c[mask] + 0.055) / 1.055) ** 2.4
-        c[~mask] /= 12.92
-        return c
-    
-    r, g, b = to_linear(r), to_linear(g), to_linear(b)
-    
-    x = (0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047
-    y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b
-    z = (0.0193339 * r + 0.1191920 * g + 0.9503041 * b) / 1.08883
-    
-    del r, g, b
-    
-    def f(t):
-        mask = t > 0.008856
-        t[mask] **= (1/3)
-        t[~mask] = 7.787 * t[~mask] + 16/116
-        return t
-    
-    fx, fy, fz = f(x), f(y), f(z)
-    
-    L = 116 * fy - 16
-    a = 500 * (fx - fy)
-    b_out = 200 * (fy - fz)
-    
-    return np.column_stack([L, a, b_out]).astype(np.float32)
-
-ALL_LAB = _build_lab_table()
+ALL_LAB = load_lab_table()
 
 
 def seymour_converter(list_of_seymours):
@@ -227,8 +193,6 @@ UNIQUE_ALL_HEXES = list(dict.fromkeys(UNIQUE_KEY_HEXES + UNIQUE_DYE_HEXES))
 ALL_ITEM_LABS = ALL_LAB[_hex_list_to_ints(UNIQUE_ALL_HEXES)]
 ALL_ITEM_TREE = cKDTree(ALL_ITEM_LABS)
 
-STATIC_DIR = os.path.join(os.path.dirname(__file__), '..', 'static')
-
 def _load_precomputed_matches():
     keys_idx_path = os.path.join(STATIC_DIR, 'hex_matches_keys.npy')
     keys_de_path = os.path.join(STATIC_DIR, 'hex_matches_keys_de.npy')
@@ -237,10 +201,10 @@ def _load_precomputed_matches():
     
     if all(os.path.exists(p) for p in [keys_idx_path, keys_de_path, all_idx_path, all_de_path]):
         return (
-            np.load(keys_idx_path),
-            np.load(keys_de_path),
-            np.load(all_idx_path),
-            np.load(all_de_path),
+            np.load(keys_idx_path, mmap_mode='r'),
+            np.load(keys_de_path, mmap_mode='r'),
+            np.load(all_idx_path, mmap_mode='r'),
+            np.load(all_de_path, mmap_mode='r'),
         )
     return None, None, None, None
 

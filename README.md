@@ -64,9 +64,10 @@ Settings are read from the environment or from `.env` in the repository root.
 
 ## Precomputed colour tables
 
-Hex lookups are O(1) because the nearest target for each of the 16,777,216 RGB colours is computed ahead of time and stored as `.npy` files in `app/static/`. The tables are not committed. The Docker image builds them, and for local development you generate them once (about 15 seconds, 270 MB) and again whenever the catalog or SciPy changes:
+Hex lookups are O(1) because the nearest target for each of the 16,777,216 RGB colours is computed ahead of time and stored as `.npy` files in `app/static/`, alongside the RGB→LAB table itself. All are memory-mapped read-only at runtime. The tables are not committed. The Docker image builds them, and for local development you generate them once (about 15 seconds, 460 MB) and again whenever the catalog or SciPy changes:
 
 ```bash
+python scripts/precompute_lab_table.py
 python scripts/precompute_hex_matches.py
 python scripts/precompute_hex_order.py
 ```
