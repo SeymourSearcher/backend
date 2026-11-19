@@ -2,6 +2,8 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
+
+import httpx
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
@@ -155,6 +157,12 @@ async def sync_bids_batch(db: AsyncSession, auctions: list[SeymourAuction]):
 
 
 async def sync_active_auctions(db: AsyncSession) -> tuple[set[str], SyncChanges]:
+    """Upsert the full active feed, then drop rows it has not refreshed lately.
+
+    The sweep lives here, after a complete fetch, rather than on a timer: when it
+    ran from the ended sync, a run of failed polls aged every row past the
+    threshold and emptied the table (bids cascade with it).
+    """
     raw_auctions = await get_all_auctions()
 
     parsed_auctions = []
@@ -171,7 +179,12 @@ async def sync_active_auctions(db: AsyncSession) -> tuple[set[str], SyncChanges]
         inserted += await upsert_active_auctions_batch(db, batch)
         await sync_bids_batch(db, batch)
 
-    return active_ids, SyncChanges(active_changed=inserted)
+    stale_cutoff = utcnow() - timedelta(minutes=STALE_THRESHOLD_MINUTES)
+    swept = (await db.execute(
+        delete(ActiveAuction).where(ActiveAuction.last_updated < stale_cutoff)
+    )).rowcount
+
+    return active_ids, SyncChanges(active_changed=inserted + swept)
 
 
 async def sync_ended_auctions(db: AsyncSession) -> SyncChanges:
@@ -195,14 +208,9 @@ async def sync_ended_auctions(db: AsyncSession) -> SyncChanges:
     # FOUND_ROWS flag, unlike the upserts above.
     removed = 0
     if ended_ids:
-        removed += (await db.execute(
+        removed = (await db.execute(
             delete(ActiveAuction).where(ActiveAuction.auction_id.in_(ended_ids))
         )).rowcount
-
-    stale_cutoff = utcnow() - timedelta(minutes=STALE_THRESHOLD_MINUTES)
-    removed += (await db.execute(
-        delete(ActiveAuction).where(ActiveAuction.last_updated < stale_cutoff)
-    )).rowcount
 
     return SyncChanges(ended_inserted=inserted, active_changed=removed)
 
@@ -224,8 +232,8 @@ async def _refresh_caches(db: AsyncSession, changes: SyncChanges) -> None:
             await auction_cache.refresh_ended(db, redis)
         if changes.active_changed:
             await auction_cache.refresh_active(db, redis)
-    except Exception as e:
-        logger.error(f"Auction cache refresh failed: {e}")
+    except Exception:
+        logger.exception("Auction cache refresh failed")
 
 
 async def run_active_sync():
@@ -233,15 +241,14 @@ async def run_active_sync():
         try:
             active_ids, changes = await sync_active_auctions(db)
             await db.commit()
-        except Exception as e:
+        except Exception:
             await db.rollback()
-            logger.error(f"Active auction sync failed: {e}")
             raise
 
         await _refresh_caches(db, changes)
         logger.info(
             f"Active auction sync complete. {len(active_ids)} active auctions, "
-            f"{changes.active_changed} new."
+            f"{changes.active_changed} added or swept."
         )
         return active_ids
 
@@ -251,9 +258,8 @@ async def run_ended_sync():
         try:
             changes = await sync_ended_auctions(db)
             await db.commit()
-        except Exception as e:
+        except Exception:
             await db.rollback()
-            logger.error(f"Ended auction sync failed: {e}")
             raise
 
         await _refresh_caches(db, changes)
@@ -263,25 +269,21 @@ async def run_ended_sync():
         )
 
 
-async def active_sync_loop():
-    logger.info(f"Starting active auction sync loop (interval: {ACTIVE_SYNC_INTERVAL}s)")
+async def _sync_forever(name: str, run, interval: int) -> None:
+    logger.info(f"Starting {name} auction sync loop (interval: {interval}s)")
     while True:
         try:
-            await run_active_sync()
-        except Exception as e:
-            logger.error(f"Active sync loop error: {e}")
-        await asyncio.sleep(ACTIVE_SYNC_INTERVAL)
-
-
-async def ended_sync_loop():
-    logger.info(f"Starting ended auction sync loop (interval: {ENDED_SYNC_INTERVAL}s)")
-    while True:
-        try:
-            await run_ended_sync()
-        except Exception as e:
-            logger.error(f"Ended sync loop error: {e}")
-        await asyncio.sleep(ENDED_SYNC_INTERVAL)
+            await run()
+        except httpx.HTTPError as e:
+            # repr, not str: httpx timeouts stringify to "".
+            logger.warning(f"{name} auction sync failed: {e!r}")
+        except Exception:
+            logger.exception(f"{name} auction sync failed")
+        await asyncio.sleep(interval)
 
 
 async def start_sync_loop():
-    await asyncio.gather(active_sync_loop(), ended_sync_loop())
+    await asyncio.gather(
+        _sync_forever("Active", run_active_sync, ACTIVE_SYNC_INTERVAL),
+        _sync_forever("Ended", run_ended_sync, ENDED_SYNC_INTERVAL),
+    )

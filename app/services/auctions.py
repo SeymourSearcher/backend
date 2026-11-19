@@ -45,32 +45,59 @@ class SeymourEndedAuction:
     timestamp: int
 
 
-async def fetch_page(client: httpx.AsyncClient, page: int) -> dict:
-    response = await client.get(f"{BASE_URL}/auctions", params={"page": page})
-    response.raise_for_status()
-    return response.json()
+# Each auctions page is ~1MB of JSON. httpx's default 5s timeout, with every page
+# requested at once, failed about half of all polls in production.
+TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+PAGE_CONCURRENCY = 8
+ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = 2.0
+
+
+def _retryable(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429 or exc.response.status_code >= 500
+    return isinstance(exc, httpx.TransportError)
+
+
+async def _get_json(client: httpx.AsyncClient, path: str, params: dict | None = None) -> dict:
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            response = await client.get(f"{BASE_URL}/{path}", params=params)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPError as exc:
+            if attempt == ATTEMPTS or not _retryable(exc):
+                raise
+            await asyncio.sleep(RETRY_BACKOFF_SECONDS * attempt)
+    raise AssertionError("unreachable")
 
 
 async def get_all_auctions() -> list[dict]:
-    async with httpx.AsyncClient() as client:
-        first_page = await fetch_page(client, 0)
+    """Every page of the active auction feed, or an exception: never a partial list.
+
+    Callers sweep rows this poll did not refresh, so a silently missing page
+    would read as those auctions having ended.
+    """
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        first_page = await _get_json(client, "auctions", {"page": 0})
         total_pages = first_page.get("totalPages", 1)
         all_auctions = first_page.get("auctions", [])
-        
-        if total_pages > 1:
-            tasks = [fetch_page(client, p) for p in range(1, total_pages)]
-            results = await asyncio.gather(*tasks)
-            for result in results:
-                all_auctions.extend(result.get("auctions", []))
-        
+
+        gate = asyncio.Semaphore(PAGE_CONCURRENCY)
+
+        async def fetch(page: int) -> dict:
+            async with gate:
+                return await _get_json(client, "auctions", {"page": page})
+
+        for result in await asyncio.gather(*(fetch(p) for p in range(1, total_pages))):
+            all_auctions.extend(result.get("auctions", []))
+
         return all_auctions
 
 
 async def get_auctions_ended() -> dict:
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{BASE_URL}/auctions_ended")
-        response.raise_for_status()
-        return response.json()
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        return await _get_json(client, "auctions_ended")
 
 
 def decode_item_bytes(item_bytes: str) -> nbtlib.Compound:
