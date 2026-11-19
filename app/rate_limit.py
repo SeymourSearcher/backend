@@ -9,6 +9,7 @@ sit with the reasoning for them, and applied one of two ways:
 app/main.py applies `global_rate_limit` to every route as a backstop under all
 of them.
 """
+import ipaddress
 import logging
 from typing import Annotated, Callable, NamedTuple
 
@@ -73,7 +74,24 @@ async def _enforce_for(rl: RateLimit, identity: str, redis: Redis) -> None:
         )
 
 
+def is_internal(request: Request) -> bool:
+    """A caller on the server's own network, i.e. the Next.js server rendering pages.
+
+    Gotcha: only sound while Cloudflare is the sole public route in, as it sets
+    CF-Connecting-IP on every request it proxies. Without that header, a private
+    peer address cannot be an outside caller.
+    """
+    if request.headers.get("CF-Connecting-IP") or not request.client:
+        return False
+    try:
+        return ipaddress.ip_address(request.client.host).is_private
+    except ValueError:
+        return False
+
+
 async def enforce(rl: RateLimit, request: Request, redis: Redis) -> None:
+    if is_internal(request):
+        return
     await _enforce_for(rl, client_ip(request), redis)
 
 

@@ -12,7 +12,9 @@ from app.errors import (
     PermissionDeniedError,
 )
 from app.schemas.common import HealthResponse
-from app.routers import auth, users, seymours, stats, hex, hex_search, marketplace, visualization
+from app.routers import (
+    auth, catalog, users, seymours, stats, hex, hex_search, marketplace, visualization,
+)
 from app.routers import auctions as auctions_router
 
 settings = get_settings()
@@ -85,6 +87,7 @@ app.include_router(hex_search.router, prefix="/hex-search", tags=["hex"])
 app.include_router(marketplace.router, prefix="/marketplace", tags=["marketplace"])
 app.include_router(auctions_router.router, prefix="/auctions", tags=["auctions"])
 app.include_router(visualization.router, prefix="/visualization", tags=["visualization"])
+app.include_router(catalog.router, prefix="/catalog", tags=["catalog"])
 
 
 ROBOTS_TXT = """User-agent: *

@@ -92,6 +92,23 @@ async def test_pattern_search_does_not_spend_the_hex_page_budget(client, redis):
     assert (await client.get("/hex/FF0000", headers=sent_from(CALLER))).status_code == 200
 
 
+async def test_the_frontend_server_rendering_pages_is_not_limited(client, redis):
+    """It calls over the internal network, with no Cloudflare header, and would
+    otherwise put every crawler's page views in one bucket."""
+    await exhaust(redis, HEX_LIMIT, ip="127.0.0.1")
+    await exhaust(redis, GLOBAL_LIMIT, ip="127.0.0.1")
+
+    assert (await client.get("/hex/FF0000")).status_code == 200
+
+
+async def test_a_cloudflare_request_is_never_treated_as_internal(client, redis):
+    await exhaust(redis, HEX_LIMIT, ip="10.0.0.5")
+
+    response = await client.get("/hex/FF0000", headers=sent_from("10.0.0.5"))
+
+    assert response.status_code == 429
+
+
 async def test_every_counter_is_created_with_an_expiry(client, redis):
     await client.get("/marketplace/sets-pieces", headers=sent_from(CALLER))
 
