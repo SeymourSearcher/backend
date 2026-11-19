@@ -1,6 +1,6 @@
 # Seymour Searcher API
 
-The backend for [Seymour Searcher](https://github.com/SeymourFinder/frontend), a collection tracker and marketplace for Seymour's Special Armor on Hypixel SkyBlock. Players upload an export of their dyed armor pieces. The API matches each hex colour against the known armor sets by delta E, works out which sets a collection could complete, and runs a buy and sell order board between players. A separate worker keeps a live copy of Seymour auctions from the Hypixel API.
+The backend for [Seymour Searcher](https://github.com/SeymourSearcher/frontend), a collection tracker and marketplace for Seymour's Special Armor on Hypixel SkyBlock. Players upload an export of their dyed armor pieces. The API matches each hex colour against the known armor sets by delta E, works out which sets a collection could complete, and runs a buy and sell order board between players. A separate worker keeps a live copy of Seymour auctions from the Hypixel API.
 
 Built with FastAPI, SQLAlchemy (async, MySQL), Redis, NumPy and SciPy, plus a small Rust extension for the custom-set search.
 
