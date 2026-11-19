@@ -21,3 +21,5 @@ rust/**/target/
 color_map.png
 color_cube.png
 color_cube_3d.html
+# precomputed colour tables, built by scripts/precompute_hex_*.py
+app/static/*.npy

@@ -64,14 +64,14 @@ Settings are read from the environment or from `.env` in the repository root.
 
 ## Precomputed colour tables
 
-Hex lookups are O(1) because the nearest target for each of the 16,777,216 RGB colours is computed ahead of time and stored as `.npy` files in `app/static/`. Regenerate them whenever the catalog (`app/static/data.json`) changes or SciPy is upgraded:
+Hex lookups are O(1) because the nearest target for each of the 16,777,216 RGB colours is computed ahead of time and stored as `.npy` files in `app/static/`. The tables are not committed. The Docker image builds them, and for local development you generate them once (about 15 seconds, 270 MB) and again whenever the catalog or SciPy changes:
 
 ```bash
 python scripts/precompute_hex_matches.py
 python scripts/precompute_hex_order.py
 ```
 
-The ordering tables are only exact against the distances the installed SciPy produces, so build them with the SciPy version you deploy.
+The ordering tables are only exact against the distances the installed SciPy produces, which is why they are built in the environment that serves them. Without them the API still works but falls back to slower per-request tree queries.
 
 ## Catalog
 

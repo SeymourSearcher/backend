@@ -38,6 +38,10 @@ RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 # Copy application code
 COPY . .
 
+# The colour tables are only exact against the cKDTree of the SciPy installed
+# above, so they are built here rather than committed. See README.md.
+RUN python scripts/precompute_hex_matches.py && python scripts/precompute_hex_order.py
+
 
 # Auction sync. Must run at exactly one replica: the loop has no cross-process lock.
 FROM base AS worker

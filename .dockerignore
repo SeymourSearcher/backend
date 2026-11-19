@@ -14,3 +14,5 @@ venv/
 # Cargo's build tree is GB-scale and host-specific; the wheel is built in its
 # own stage (see Dockerfile).
 **/target/
+# Regenerated in the image; host copies would only bloat the build context.
+app/static/*.npy
